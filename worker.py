@@ -362,33 +362,34 @@ class MemoryState:
         self._lock = asyncio.Lock()
         log.info("Memory state ready: no local history or dedup data is persisted.")
 
-    async def check_and_mark(self, key: str) -> bool:
+    async def is_seen(self, key: str) -> bool:
         async with self._lock:
             if key in self._seen:
                 self._seen.move_to_end(key)
-                return False
+                return True
+            return False
+
+    async def mark_seen(self, key: str):
+        async with self._lock:
             self._seen[key] = True
+            self._seen.move_to_end(key)
             if len(self._seen) > MEMORY_STATE_MAX_SEEN:
                 self._seen.popitem(last=False)
-            return True
 
     async def delete_key(self, key: str):
         async with self._lock:
             self._seen.pop(key, None)
 
-    async def check_and_swap_hash(self, url: str, new_hash: str) -> tuple[bool, bool]:
+    async def get_hash(self, url: str) -> Optional[str]:
         async with self._lock:
-            old_hash = self._hashes.get(url)
-            if old_hash == new_hash:
-                if old_hash is not None:
-                    self._hashes.move_to_end(url)
-                return False, old_hash is not None
-            had_prev = old_hash is not None
+            return self._hashes.get(url)
+
+    async def set_hash(self, url: str, new_hash: str):
+        async with self._lock:
             self._hashes[url] = new_hash
             self._hashes.move_to_end(url)
             if len(self._hashes) > MEMORY_STATE_MAX_HASHES:
                 self._hashes.popitem(last=False)
-            return True, had_prev
 
     async def get_last_heartbeat(self) -> Optional[datetime]:
         async with self._lock:
@@ -472,15 +473,17 @@ async def notify(
     title: str,
     body: str,
     notify_type: str = apprise.NotifyType.INFO,
-):
+) -> bool:
     try:
         loop = asyncio.get_running_loop()   # 3.10+-safe (get_event_loop deprecated)
         await loop.run_in_executor(
             None, lambda: ap.notify(title=title, body=body, notify_type=notify_type)
         )
         log.info(f"Alert sent: {title}")
+        return True
     except Exception as exc:
         log.error(f"Alert failed: {exc}")
+        return False
 
 # ─── HTTP Fetcher — anti-ban + exponential backoff ────────────────────────────
 
@@ -616,14 +619,16 @@ async def check_target(
     sm: SessionManager,
     db: Database,
     ap: apprise.Apprise,
+    html: Optional[str] = None,
 ):
     log.info(f"[Target] Checking: {target.name}")
-    html = await fetch_with_retry(
-        sm, target.url,
-        timeout     = cfg.glob.request_timeout,
-        proxy       = target.proxy,
-        delay_range = (cfg.glob.randomize_delay_min, cfg.glob.randomize_delay_max),
-    )
+    if html is None:
+        html = await fetch_with_retry(
+            sm, target.url,
+            timeout     = cfg.glob.request_timeout,
+            proxy       = target.proxy,
+            delay_range = (cfg.glob.randomize_delay_min, cfg.glob.randomize_delay_max),
+        )
     if html is None:
         return
 
@@ -635,11 +640,13 @@ async def check_target(
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if target.detection_mode == "content_hash":
-            changed, had_prev = await db.check_and_swap_hash(
-                target.url, _visible_text_hash(html)
-            )
-            if changed and had_prev:
-                await notify(
+            new_hash = _visible_text_hash(html)
+            current_hash = await db.get_hash(target.url)
+            if current_hash is None:
+                await db.set_hash(target.url, new_hash)
+                log.info(f"[Target] First-run baseline stored: {target.name}")
+            elif current_hash != new_hash:
+                success = await notify(
                     ap,
                     title = f"🔔 Page Changed: {target.name}",
                     body  = (
@@ -651,8 +658,10 @@ async def check_target(
                     ),
                     notify_type = apprise.NotifyType.SUCCESS,
                 )
-            elif changed and not had_prev:
-                log.info(f"[Target] First-run baseline stored: {target.name}")
+                if success:
+                    await db.set_hash(target.url, new_hash)
+                else:
+                    log.error(f"[Target] Notification failed, keeping previous hash for {target.name}")
             else:
                 log.debug(f"[Target] No change: {target.name}")
 
@@ -667,9 +676,9 @@ async def check_target(
             db_key = f"stock:{target.url}:in_stock"
 
             if in_stock:
-                is_new = await db.check_and_mark(db_key)
-                if is_new:
-                    await notify(
+                seen = await db.is_seen(db_key)
+                if not seen:
+                    success = await notify(
                         ap,
                         title = f"✅ IN STOCK: {target.name}",
                         body  = (
@@ -682,6 +691,10 @@ async def check_target(
                         ),
                         notify_type = apprise.NotifyType.SUCCESS,
                     )
+                    if success:
+                        await db.mark_seen(db_key)
+                    else:
+                        log.error(f"[Target] Notification failed for {target.name}; will retry on next check")
                 else:
                     log.debug(f"[Target] Still in stock (already notified): {target.name}")
             else:
@@ -709,22 +722,24 @@ async def check_feed(
     sm: SessionManager,
     db: Database,
     ap: apprise.Apprise,
+    raw_xml: Optional[str] = None,
     timeout: int = 30,
     delay_range: tuple[float, float] = (1.0, 3.0),
 ):
     log.info(f"[RSS] Checking: {feed.name}")
     try:
-        raw = await fetch_with_retry(
-            sm,
-            feed.url,
-            timeout=timeout,
-            proxy=feed.proxy,
-            delay_range=delay_range,
-        )
-        if raw is None:
-            return
+        if raw_xml is None:
+            raw_xml = await fetch_with_retry(
+                sm,
+                feed.url,
+                timeout=timeout,
+                proxy=feed.proxy,
+                delay_range=delay_range,
+            )
+            if raw_xml is None:
+                return
         loop   = asyncio.get_running_loop()
-        parsed = await loop.run_in_executor(None, lambda: feedparser.parse(raw))
+        parsed = await loop.run_in_executor(None, lambda: feedparser.parse(raw_xml))
     except Exception as exc:
         log.error(f"[RSS] Parse error {feed.name}: {exc}")
         return
@@ -744,8 +759,7 @@ async def check_feed(
             continue
 
         db_key = f"rss:{feed.url}:{hashlib.md5(guid.encode()).hexdigest()}"
-        is_new = await db.check_and_mark(db_key)
-        if not is_new:
+        if await db.is_seen(db_key):
             continue
 
         new_count += 1
@@ -755,7 +769,7 @@ async def check_feed(
         pub     = (entry.get("published") or entry.get("updated") or "")[:25]
         kw_line = f"🏷 `{', '.join(feed.keywords)}`\n" if feed.keywords else ""
 
-        await notify(
+        success = await notify(
             ap,
             title = f"📡 [{feed.name}] {title[:60]}",
             body  = (
@@ -767,6 +781,10 @@ async def check_feed(
             ),
             notify_type = apprise.NotifyType.INFO,
         )
+        if success:
+            await db.mark_seen(db_key)
+        else:
+            log.error(f"[RSS] Notification failed for {feed.name} entry {title[:40]} and will retry")
         await asyncio.sleep(1.5)   # respect Telegram 30 msg/s limit
 
     if new_count:
@@ -843,7 +861,7 @@ class Worker:
             self.cfg              = load_config(CONFIG_PATH)
             self._last_cfg_mtime  = mtime
             self._ap              = build_apprise(self.cfg.glob.apprise_urls)
-            self._next_check.clear()
+            self._prune_next_check()
             return True
         except Exception as exc:
             log.error(f"Config reload failed: {exc}")
@@ -858,22 +876,48 @@ class Worker:
             return True
         return False
 
+    def _prune_next_check(self):
+        valid_keys = {
+            *(f"target:{t.url}" for t in self.cfg.targets),
+            *(f"feed:{f.url}" for f in self.cfg.feeds),
+        }
+        self._next_check = {k: v for k, v in self._next_check.items() if k in valid_keys}
+
     # ── Semaphore-wrapped task runners ────────────────────────────────────────
 
     async def _run_target(self, target: TargetConfig):
+        html = None
         async with self._sem:
-            await check_target(target, self.cfg, self._sm, self.db, self._ap)
-
-    async def _run_feed(self, feed: FeedConfig):
-        async with self._sem:
-            await check_feed(
-                feed,
+            html = await fetch_with_retry(
                 self._sm,
-                self.db,
-                self._ap,
+                target.url,
                 timeout=self.cfg.glob.request_timeout,
+                proxy=target.proxy,
                 delay_range=(self.cfg.glob.randomize_delay_min, self.cfg.glob.randomize_delay_max),
             )
+        if html is None:
+            return
+        await check_target(target, self.cfg, self._sm, self.db, self._ap, html=html)
+
+    async def _run_feed(self, feed: FeedConfig):
+        raw_xml = None
+        async with self._sem:
+            raw_xml = await fetch_with_retry(
+                self._sm,
+                feed.url,
+                timeout=self.cfg.glob.request_timeout,
+                proxy=feed.proxy,
+                delay_range=(self.cfg.glob.randomize_delay_min, self.cfg.glob.randomize_delay_max),
+            )
+        if raw_xml is None:
+            return
+        await check_feed(
+            feed,
+            self._sm,
+            self.db,
+            self._ap,
+            raw_xml=raw_xml,
+        )
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
