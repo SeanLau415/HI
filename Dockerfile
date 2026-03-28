@@ -39,7 +39,7 @@ VOLUME ["/app/data"]
 
 # Config path env — can override at runtime
 ENV CONFIG_PATH=/app/data/config.yaml
-ENV DB_PATH=/app/data/history.db
+ENV PERSIST_STATE=false
 
 # Run as non-root for security
 RUN useradd -r -s /bin/false worker

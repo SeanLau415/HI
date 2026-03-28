@@ -51,7 +51,8 @@ log = logging.getLogger("worker")
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 CONFIG_PATH         = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
-DB_PATH             = Path(os.environ.get("DB_PATH",     "history.db"))
+DB_PATH             = Path(os.environ["DB_PATH"]) if os.environ.get("DB_PATH") else None
+PERSIST_STATE       = os.environ.get("PERSIST_STATE", "false").strip().lower() in ("1", "true", "yes")
 MAX_BACKOFF         = 300   # 5 min ceiling on retry backoff
 IMPERSONATE         = "chrome120"
 SESSION_MAX_AGE_H   = 6     # recreate HTTP session every 6 hours regardless
@@ -107,45 +108,92 @@ class AppConfig:
     feeds: list[FeedConfig]
     _mtime: float = 0.0
 
+
+def _parse_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_optional_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_bool(value, default=True):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
 # ─── Config Loader ────────────────────────────────────────────────────────────
 
 def load_config(path: Path) -> AppConfig:
     with open(path, encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh)
+        raw = yaml.safe_load(fh) or {}
+    if not isinstance(raw, dict):
+        log.warning("Config file is not a mapping; using empty configuration")
+        raw = {}
 
-    g = raw.get("global", {})
+    g = raw.get("global", {}) if isinstance(raw.get("global", {}), dict) else {}
     glob = GlobalConfig(
         apprise_urls              = g.get("apprise_urls", []),
-        check_interval_minutes    = int(g.get("check_interval_minutes", 30)),
-        heartbeat_interval_hours  = int(g.get("heartbeat_interval_hours", 24)),
-        request_timeout           = int(g.get("request_timeout", 30)),
-        randomize_delay_min       = float(g.get("randomize_delay_min", 1.0)),
-        randomize_delay_max       = float(g.get("randomize_delay_max", 3.0)),
+        check_interval_minutes    = _parse_int(g.get("check_interval_minutes", 30), 30),
+        heartbeat_interval_hours  = _parse_int(g.get("heartbeat_interval_hours", 24), 24),
+        request_timeout           = _parse_int(g.get("request_timeout", 30), 30),
+        randomize_delay_min       = _parse_float(g.get("randomize_delay_min", 1.0), 1.0),
+        randomize_delay_max       = _parse_float(g.get("randomize_delay_max", 3.0), 3.0),
     )
 
-    targets = [
-        TargetConfig(
+    raw_targets = raw.get("targets") or []
+    if isinstance(raw_targets, dict):
+        raw_targets = [raw_targets]
+    if not isinstance(raw_targets, list):
+        raw_targets = []
+
+    targets = []
+    for t in raw_targets:
+        if not isinstance(t, dict):
+            continue
+        targets.append(TargetConfig(
             name                   = t.get("name", "Unknown"),
             url                    = t.get("url", ""),
             detection_mode         = t.get("detection_mode", "selector_disappears"),
             css_selector           = t.get("css_selector", ""),
             proxy                  = t.get("proxy", ""),
-            check_interval_minutes = t.get("check_interval_minutes"),
-            enabled                = t.get("enabled", True),
-        )
-        for t in (raw.get("targets") or [])
-    ]
+            check_interval_minutes = _parse_optional_int(t.get("check_interval_minutes")),
+            enabled                = _parse_bool(t.get("enabled", True)),
+        ))
 
-    feeds = [
-        FeedConfig(
+    raw_feeds = raw.get("rss_feeds") or []
+    if isinstance(raw_feeds, dict):
+        raw_feeds = [raw_feeds]
+    if not isinstance(raw_feeds, list):
+        raw_feeds = []
+
+    feeds = []
+    for f in raw_feeds:
+        if not isinstance(f, dict):
+            continue
+        feeds.append(FeedConfig(
             name                   = f.get("name", "Unknown"),
             url                    = f.get("url", ""),
-            keywords               = [k.lower() for k in f.get("keywords", [])],
-            check_interval_minutes = f.get("check_interval_minutes"),
-            enabled                = f.get("enabled", True),
-        )
-        for f in (raw.get("rss_feeds") or [])
-    ]
+            keywords               = [k.lower() for k in (f.get("keywords", []) or []) if isinstance(k, str)],
+            check_interval_minutes = _parse_optional_int(f.get("check_interval_minutes")),
+            enabled                = _parse_bool(f.get("enabled", True)),
+        ))
 
     cfg        = AppConfig(glob=glob, targets=targets, feeds=feeds)
     cfg._mtime = path.stat().st_mtime
@@ -255,6 +303,46 @@ class Database:
 
     def close(self):
         self._conn.close()
+
+
+class MemoryState:
+    def __init__(self):
+        self._seen: set[str] = set()
+        self._hashes: dict[str, str] = {}
+        self._last_heartbeat: Optional[datetime] = None
+        self._lock = asyncio.Lock()
+        log.info("Memory state ready: no local history or dedup data is persisted.")
+
+    async def check_and_mark(self, key: str) -> bool:
+        async with self._lock:
+            if key in self._seen:
+                return False
+            self._seen.add(key)
+            return True
+
+    async def delete_key(self, key: str):
+        async with self._lock:
+            self._seen.discard(key)
+
+    async def check_and_swap_hash(self, url: str, new_hash: str) -> tuple[bool, bool]:
+        async with self._lock:
+            old_hash = self._hashes.get(url)
+            if old_hash == new_hash:
+                return False, old_hash is not None
+            had_prev = old_hash is not None
+            self._hashes[url] = new_hash
+            return True, had_prev
+
+    async def get_last_heartbeat(self) -> Optional[datetime]:
+        async with self._lock:
+            return self._last_heartbeat
+
+    async def update_heartbeat(self):
+        async with self._lock:
+            self._last_heartbeat = datetime.utcnow()
+
+    def close(self):
+        pass
 
 # ─── HTTP Session Manager ─────────────────────────────────────────────────────
 #
@@ -561,13 +649,13 @@ async def check_feed(
         if not guid:
             continue
 
+        if not _entry_matches(entry, feed.keywords):
+            log.debug(f"[RSS] Keyword miss: {entry.get('title','')[:60]}")
+            continue
+
         db_key = f"rss:{feed.url}:{hashlib.md5(guid.encode()).hexdigest()}"
         is_new = await db.check_and_mark(db_key)
         if not is_new:
-            continue
-
-        if not _entry_matches(entry, feed.keywords):
-            log.debug(f"[RSS] Keyword miss: {entry.get('title','')[:60]}")
             continue
 
         new_count += 1
@@ -692,7 +780,12 @@ class Worker:
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     async def run(self):
-        self.db = Database(DB_PATH)
+        if PERSIST_STATE and DB_PATH:
+            self.db = Database(DB_PATH)
+        else:
+            if PERSIST_STATE and not DB_PATH:
+                log.warning("PERSIST_STATE=true set but DB_PATH is empty; using in-memory state instead.")
+            self.db = MemoryState()
 
         if not self._load_or_reload():
             log.critical("Cannot start without config.yaml — exiting.")
