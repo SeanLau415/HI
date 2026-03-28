@@ -99,6 +99,7 @@ class FeedConfig:
     name: str
     url: str
     keywords: list[str]     = field(default_factory=list)
+    proxy: str              = ""
     check_interval_minutes: Optional[int] = None
     enabled: bool           = True
 
@@ -192,6 +193,7 @@ def load_config(path: Path) -> AppConfig:
             name                   = f.get("name", "Unknown"),
             url                    = f.get("url", ""),
             keywords               = [k.lower() for k in (f.get("keywords", []) or []) if isinstance(k, str)],
+            proxy                  = f.get("proxy", ""),
             check_interval_minutes = _parse_optional_int(f.get("check_interval_minutes")),
             enabled                = _parse_bool(f.get("enabled", True)),
         ))
@@ -267,8 +269,12 @@ class Database:
         content_hash mode: atomically replace old hash with new one.
         Returns (hash_changed: bool, had_previous_hash: bool).
         """
-        hash_key = f"hashval:{url}:{new_hash}"
-        pattern  = f"hashval:{url}:%"
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        hash_key = f"hashval:{url_hash}:{new_hash}"
+        pattern  = f"hashval:{url_hash}:%"
+        escaped_url = url.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        old_pattern = f"hashval:{escaped_url}:%"
+
         async with self._lock:
             if self._conn.execute(
                 "SELECT 1 FROM seen WHERE key = ?", (hash_key,)
@@ -276,10 +282,14 @@ class Database:
                 return False, True   # same as last time
 
             had_prev = bool(self._conn.execute(
-                "SELECT 1 FROM seen WHERE key LIKE ?", (pattern,)
+                "SELECT 1 FROM seen WHERE key LIKE ? OR key LIKE ? ESCAPE '\\'",
+                (pattern, old_pattern),
             ).fetchone())
 
-            self._conn.execute("DELETE FROM seen WHERE key LIKE ?", (pattern,))
+            self._conn.execute(
+                "DELETE FROM seen WHERE key LIKE ? OR key LIKE ? ESCAPE '\\'",
+                (pattern, old_pattern),
+            )
             self._conn.execute(
                 "INSERT INTO seen (key, first_seen) VALUES (?, ?)",
                 (hash_key, datetime.utcnow().isoformat()),
@@ -375,20 +385,22 @@ class SessionManager:
         self._session: Optional[AsyncSession] = None
         self._born_at: float = 0.0          # monotonic timestamp of creation
         self._stale:   bool  = False         # error-triggered immediate reset
+        self._lock = asyncio.Lock()
 
     async def get(self) -> AsyncSession:
         """Return a live session, creating or recreating as needed."""
-        age_h = (time.monotonic() - self._born_at) / 3600
-        if self._session is None or self._stale or age_h >= SESSION_MAX_AGE_H:
-            await self._close()
-            reason = "initial" if self._session is None else \
-                     "error-triggered reset" if self._stale else \
-                     f"age {age_h:.1f}h ≥ {SESSION_MAX_AGE_H}h limit"
-            log.info(f"[Session] Creating new HTTP session ({reason})")
-            self._session = AsyncSession(impersonate=IMPERSONATE)
-            self._born_at = time.monotonic()
-            self._stale   = False
-        return self._session
+        async with self._lock:
+            age_h = (time.monotonic() - self._born_at) / 3600
+            if self._session is None or self._stale or age_h >= SESSION_MAX_AGE_H:
+                await self._close()
+                reason = "initial" if self._session is None else \
+                         "error-triggered reset" if self._stale else \
+                         f"age {age_h:.1f}h ≥ {SESSION_MAX_AGE_H}h limit"
+                log.info(f"[Session] Creating new HTTP session ({reason})")
+                self._session = AsyncSession(impersonate=IMPERSONATE)
+                self._born_at = time.monotonic()
+                self._stale   = False
+            return self._session
 
     def invalidate(self):
         """Call this on transport-level errors to force recreation on next request."""
@@ -634,13 +646,25 @@ def _strip_html(raw: str, limit: int = 300) -> str:
 
 async def check_feed(
     feed: FeedConfig,
+    sm: SessionManager,
     db: Database,
     ap: apprise.Apprise,
+    timeout: int = 30,
+    delay_range: tuple[float, float] = (1.0, 3.0),
 ):
     log.info(f"[RSS] Checking: {feed.name}")
     try:
+        raw = await fetch_with_retry(
+            sm,
+            feed.url,
+            timeout=timeout,
+            proxy=feed.proxy,
+            delay_range=delay_range,
+        )
+        if raw is None:
+            return
         loop   = asyncio.get_running_loop()
-        parsed = await loop.run_in_executor(None, lambda: feedparser.parse(feed.url))
+        parsed = await loop.run_in_executor(None, lambda: feedparser.parse(raw))
     except Exception as exc:
         log.error(f"[RSS] Parse error {feed.name}: {exc}")
         return
@@ -715,7 +739,7 @@ async def maybe_send_heartbeat(cfg: AppConfig, db: Database, ap: apprise.Apprise
 
 async def _run_jittered(coro, delay: float):
     await asyncio.sleep(delay)
-    await coro
+    return await coro
 
 # ─── Main Scheduler ───────────────────────────────────────────────────────────
 
@@ -759,6 +783,7 @@ class Worker:
             self.cfg              = load_config(CONFIG_PATH)
             self._last_cfg_mtime  = mtime
             self._ap              = build_apprise(self.cfg.glob.apprise_urls)
+            self._next_check.clear()
             return True
         except Exception as exc:
             log.error(f"Config reload failed: {exc}")
@@ -781,7 +806,14 @@ class Worker:
 
     async def _run_feed(self, feed: FeedConfig):
         async with self._sem:
-            await check_feed(feed, self.db, self._ap)
+            await check_feed(
+                feed,
+                self._sm,
+                self.db,
+                self._ap,
+                timeout=self.cfg.glob.request_timeout,
+                delay_range=(self.cfg.glob.randomize_delay_min, self.cfg.glob.randomize_delay_max),
+            )
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
