@@ -57,6 +57,7 @@ MAX_BACKOFF         = 300   # 5 min ceiling on retry backoff
 IMPERSONATE         = "chrome120"
 SESSION_MAX_AGE_H   = 6     # recreate HTTP session every 6 hours regardless
 MAX_CONCURRENT      = 4     # semaphore cap for 1C/2G VPS
+SEEN_RETENTION_DAYS = 30    # prune seen/rss/hash dedup history older than this
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -298,6 +299,11 @@ class Database:
             self._conn.execute(
                 "INSERT OR REPLACE INTO last_heartbeat (id, ts) VALUES (1, ?)",
                 (datetime.utcnow().isoformat(),),
+            )
+            expiry = datetime.utcnow() - timedelta(days=SEEN_RETENTION_DAYS)
+            self._conn.execute(
+                "DELETE FROM seen WHERE first_seen < ?",
+                (expiry.isoformat(),),
             )
             self._conn.commit()
 
