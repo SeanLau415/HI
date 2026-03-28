@@ -78,10 +78,6 @@ docker run -d \
   -v /opt/monitor/data:/app/data \
   monitor-worker
 
-# If you want to keep no local state on the VPS, use the default configuration above.
-# To preserve history across restarts, mount a writable data directory and set:
-#   -e PERSIST_STATE=true -e DB_PATH=/app/data/history.db
-
 # Update config without rebuilding:
 # 1. Edit config.yaml locally in config_builder.py
 # 2. sftp> put config.yaml /opt/monitor/data/config.yaml
@@ -129,17 +125,9 @@ button[disabled]
 
 ---
 
-## Optional local state
+## SQLite (history.db)
 
-By default the Docker worker uses in-memory deduplication and does not persist alerts or history to disk.
-If you want restart-safe dedup, set these environment variables:
-
-```ini
--e PERSIST_STATE=true \
--e DB_PATH=/app/data/history.db
-```
-
-When enabled, the worker writes **only dedup keys** to SQLite — no personal data, no scraped content.
+The worker writes **only dedup keys** to SQLite — no personal data, no scraped content.
 - `seen` table: URL/GUID hashes to prevent duplicate alerts
 - `last_heartbeat` table: timestamp of last heartbeat notification
 

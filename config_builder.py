@@ -86,9 +86,6 @@ def build_yaml(data: dict) -> str:
     for f in feeds:
         lines.append(f"  - name: {_yaml_str(f.get('name', ''))}")
         lines.append(f"    url: {_yaml_str(f.get('url', ''))}")
-        proxy = f.get('proxy', '')
-        if proxy:
-            lines.append(f"    proxy: {_yaml_str(proxy)}")
         kws = f.get('keywords', [])
         if kws:
             lines.append("    keywords:")
@@ -331,14 +328,6 @@ class RSSDialog(tk.Toplevel):
                             font=("Courier", 10), width=50)
         self.url.pack(fill="x", padx=16, ipady=5)
 
-        tk.Label(self, text="Proxy  (optional: socks5://user:pass@host:port)",
-                 bg=DARK2, fg=TEXT2, font=("Helvetica", 9)).pack(anchor="w", **pad)
-        self.proxy = tk.Entry(self, bg=DARK3, fg=TEXT, insertbackground=TEXT,
-                              relief="flat", bd=0, highlightthickness=1,
-                              highlightbackground=BORDER, highlightcolor=ACCENT,
-                              font=("Courier", 10), width=50)
-        self.proxy.pack(fill="x", padx=16, ipady=5)
-
         tk.Label(self, text="Keywords Filter  (comma-separated, blank = all items)",
                  bg=DARK2, fg=TEXT2, font=("Helvetica", 9)).pack(anchor="w", **pad)
         self.keywords = tk.Entry(self, bg=DARK3, fg=TEXT, insertbackground=TEXT,
@@ -371,7 +360,6 @@ class RSSDialog(tk.Toplevel):
         if existing:
             self.name.insert(0, existing.get("name", ""))
             self.url.insert(0, existing.get("url", ""))
-            self.proxy.insert(0, existing.get("proxy", ""))
             kws = existing.get("keywords", [])
             if kws:
                 self.keywords.insert(0, ", ".join(kws))
@@ -394,7 +382,6 @@ class RSSDialog(tk.Toplevel):
         self.result = {
             "name": name,
             "url": url,
-            "proxy": self.proxy.get().strip(),
             "keywords": keywords,
             "enabled": self.enabled_var.get(),
         }
