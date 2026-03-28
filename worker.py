@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from collections import OrderedDict
 
 import apprise
 import feedparser
@@ -58,6 +59,8 @@ IMPERSONATE         = "chrome120"
 SESSION_MAX_AGE_H   = 6     # recreate HTTP session every 6 hours regardless
 MAX_CONCURRENT      = 4     # semaphore cap for 1C/2G VPS
 SEEN_RETENTION_DAYS = 30    # prune seen/rss/hash dedup history older than this
+MEMORY_STATE_MAX_SEEN   = 5000  # max in-memory dedup entries when PERSIST_STATE=false
+MEMORY_STATE_MAX_HASHES = 1000  # max in-memory content_hash entries when PERSIST_STATE=false
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -240,6 +243,78 @@ class Database:
         """)
         self._conn.commit()
 
+    def _db_fetchone(self, sql: str, params: tuple = ()):  # noqa: MC0001
+        return self._conn.execute(sql, params).fetchone()
+
+    def _db_execute(self, sql: str, params: tuple = ()):  # noqa: MC0001
+        self._conn.execute(sql, params)
+
+    def _db_execute_commit(self, sql: str, params: tuple = ()):  # noqa: MC0001
+        self._conn.execute(sql, params)
+        self._conn.commit()
+
+    def _db_check_and_mark(self, key: str) -> bool:
+        if self._conn.execute(
+            "SELECT 1 FROM seen WHERE key = ?", (key,)
+        ).fetchone():
+            return False
+        self._conn.execute(
+            "INSERT OR IGNORE INTO seen (key, first_seen) VALUES (?, ?)",
+            (key, datetime.utcnow().isoformat()),
+        )
+        self._conn.commit()
+        return True
+
+    def _db_delete_key(self, key: str):
+        self._conn.execute("DELETE FROM seen WHERE key = ?", (key,))
+        self._conn.commit()
+
+    def _db_check_and_swap_hash(self, url: str, new_hash: str) -> tuple[bool, bool]:
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        hash_key = f"hashval:{url_hash}:{new_hash}"
+        pattern  = f"hashval:{url_hash}:%"
+        escaped_url = url.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        old_pattern = f"hashval:{escaped_url}:%"
+
+        if self._conn.execute(
+            "SELECT 1 FROM seen WHERE key = ?", (hash_key,)
+        ).fetchone():
+            return False, True   # same as last time
+
+        had_prev = bool(self._conn.execute(
+            "SELECT 1 FROM seen WHERE key LIKE ? OR key LIKE ? ESCAPE '\\'",
+            (pattern, old_pattern),
+        ).fetchone())
+
+        self._conn.execute(
+            "DELETE FROM seen WHERE key LIKE ? OR key LIKE ? ESCAPE '\\'",
+            (pattern, old_pattern),
+        )
+        self._conn.execute(
+            "INSERT INTO seen (key, first_seen) VALUES (?, ?)",
+            (hash_key, datetime.utcnow().isoformat()),
+        )
+        self._conn.commit()
+        return True, had_prev
+
+    def _db_get_last_heartbeat(self) -> Optional[datetime]:
+        row = self._conn.execute(
+            "SELECT ts FROM last_heartbeat WHERE id = 1"
+        ).fetchone()
+        return datetime.fromisoformat(row[0]) if row else None
+
+    def _db_update_heartbeat(self):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO last_heartbeat (id, ts) VALUES (1, ?)",
+            (datetime.utcnow().isoformat(),),
+        )
+        expiry = datetime.utcnow() - timedelta(days=SEEN_RETENTION_DAYS)
+        self._conn.execute(
+            "DELETE FROM seen WHERE first_seen < ?",
+            (expiry.isoformat(),),
+        )
+        self._conn.commit()
+
     async def check_and_mark(self, key: str) -> bool:
         """
         Atomically check-then-insert.
@@ -247,75 +322,33 @@ class Database:
         Returns False → already seen → skip.
         """
         async with self._lock:
-            if self._conn.execute(
-                "SELECT 1 FROM seen WHERE key = ?", (key,)
-            ).fetchone():
-                return False
-            self._conn.execute(
-                "INSERT OR IGNORE INTO seen (key, first_seen) VALUES (?, ?)",
-                (key, datetime.utcnow().isoformat()),
-            )
-            self._conn.commit()
-            return True
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, self._db_check_and_mark, key)
 
     async def delete_key(self, key: str):
         """Remove key (e.g. item went back out-of-stock → reset so we re-alert)."""
         async with self._lock:
-            self._conn.execute("DELETE FROM seen WHERE key = ?", (key,))
-            self._conn.commit()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._db_delete_key, key)
 
     async def check_and_swap_hash(self, url: str, new_hash: str) -> tuple[bool, bool]:
         """
         content_hash mode: atomically replace old hash with new one.
         Returns (hash_changed: bool, had_previous_hash: bool).
         """
-        url_hash = hashlib.md5(url.encode()).hexdigest()
-        hash_key = f"hashval:{url_hash}:{new_hash}"
-        pattern  = f"hashval:{url_hash}:%"
-        escaped_url = url.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        old_pattern = f"hashval:{escaped_url}:%"
-
         async with self._lock:
-            if self._conn.execute(
-                "SELECT 1 FROM seen WHERE key = ?", (hash_key,)
-            ).fetchone():
-                return False, True   # same as last time
-
-            had_prev = bool(self._conn.execute(
-                "SELECT 1 FROM seen WHERE key LIKE ? OR key LIKE ? ESCAPE '\\'",
-                (pattern, old_pattern),
-            ).fetchone())
-
-            self._conn.execute(
-                "DELETE FROM seen WHERE key LIKE ? OR key LIKE ? ESCAPE '\\'",
-                (pattern, old_pattern),
-            )
-            self._conn.execute(
-                "INSERT INTO seen (key, first_seen) VALUES (?, ?)",
-                (hash_key, datetime.utcnow().isoformat()),
-            )
-            self._conn.commit()
-            return True, had_prev
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, self._db_check_and_swap_hash, url, new_hash)
 
     async def get_last_heartbeat(self) -> Optional[datetime]:
         async with self._lock:
-            row = self._conn.execute(
-                "SELECT ts FROM last_heartbeat WHERE id = 1"
-            ).fetchone()
-            return datetime.fromisoformat(row[0]) if row else None
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, self._db_get_last_heartbeat)
 
     async def update_heartbeat(self):
         async with self._lock:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO last_heartbeat (id, ts) VALUES (1, ?)",
-                (datetime.utcnow().isoformat(),),
-            )
-            expiry = datetime.utcnow() - timedelta(days=SEEN_RETENTION_DAYS)
-            self._conn.execute(
-                "DELETE FROM seen WHERE first_seen < ?",
-                (expiry.isoformat(),),
-            )
-            self._conn.commit()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._db_update_heartbeat)
 
     def close(self):
         self._conn.close()
@@ -323,8 +356,8 @@ class Database:
 
 class MemoryState:
     def __init__(self):
-        self._seen: set[str] = set()
-        self._hashes: dict[str, str] = {}
+        self._seen: OrderedDict[str, bool] = OrderedDict()
+        self._hashes: OrderedDict[str, str] = OrderedDict()
         self._last_heartbeat: Optional[datetime] = None
         self._lock = asyncio.Lock()
         log.info("Memory state ready: no local history or dedup data is persisted.")
@@ -332,21 +365,29 @@ class MemoryState:
     async def check_and_mark(self, key: str) -> bool:
         async with self._lock:
             if key in self._seen:
+                self._seen.move_to_end(key)
                 return False
-            self._seen.add(key)
+            self._seen[key] = True
+            if len(self._seen) > MEMORY_STATE_MAX_SEEN:
+                self._seen.popitem(last=False)
             return True
 
     async def delete_key(self, key: str):
         async with self._lock:
-            self._seen.discard(key)
+            self._seen.pop(key, None)
 
     async def check_and_swap_hash(self, url: str, new_hash: str) -> tuple[bool, bool]:
         async with self._lock:
             old_hash = self._hashes.get(url)
             if old_hash == new_hash:
+                if old_hash is not None:
+                    self._hashes.move_to_end(url)
                 return False, old_hash is not None
             had_prev = old_hash is not None
             self._hashes[url] = new_hash
+            self._hashes.move_to_end(url)
+            if len(self._hashes) > MEMORY_STATE_MAX_HASHES:
+                self._hashes.popitem(last=False)
             return True, had_prev
 
     async def get_last_heartbeat(self) -> Optional[datetime]:
@@ -554,6 +595,21 @@ def _page_title(html: str, fallback: str) -> str:
     tag  = soup.find("title")
     return tag.get_text(strip=True) if tag else fallback
 
+def _is_waf_challenge(html: str) -> bool:
+    text = html.lower()
+    patterns = [
+        "just a moment",
+        "attention required",
+        "checking your browser",
+        "please enable javascript and cookies",
+        "please turn javascript on",
+        "cloudflare ray id",
+        "security check",
+        "ddos protection",
+        "if you are human",
+    ]
+    return any(p in text for p in patterns)
+
 async def check_target(
     target: TargetConfig,
     cfg: AppConfig,
@@ -569,6 +625,10 @@ async def check_target(
         delay_range = (cfg.glob.randomize_delay_min, cfg.glob.randomize_delay_max),
     )
     if html is None:
+        return
+
+    if _is_waf_challenge(html):
+        log.warning(f"[Target] Skipping WAF challenge page for {target.name}: {target.url}")
         return
 
     try:
@@ -846,7 +906,8 @@ class Worker:
                 if not target.enabled:
                     continue
                 interval = (target.check_interval_minutes
-                            or self.cfg.glob.check_interval_minutes)
+                            if target.check_interval_minutes is not None
+                            else self.cfg.glob.check_interval_minutes)
                 if self._is_due(f"target:{target.url}", interval):
                     tasks.append(self._run_target(target))
 
@@ -854,7 +915,8 @@ class Worker:
                 if not feed.enabled:
                     continue
                 interval = (feed.check_interval_minutes
-                            or self.cfg.glob.check_interval_minutes)
+                            if feed.check_interval_minutes is not None
+                            else self.cfg.glob.check_interval_minutes)
                 if self._is_due(f"feed:{feed.url}", interval):
                     tasks.append(self._run_feed(feed))
 
@@ -867,6 +929,9 @@ class Worker:
                     for i, t in enumerate(tasks)
                 ]
                 await asyncio.gather(*jitter_coros, return_exceptions=True)
+
+            if not self._running:
+                break
 
             log.debug("Loop done — sleeping 60s")
             await asyncio.sleep(60)
@@ -887,10 +952,12 @@ async def main():
     import signal
 
     def _on_signal():
-        asyncio.create_task(worker.stop())
+        worker._running = False
+        current = asyncio.current_task(loop)
         for task in asyncio.all_tasks(loop):
-            if task != asyncio.current_task():
-                task.cancel()
+            if task is current:
+                continue
+            task.cancel()
 
     loop.add_signal_handler(signal.SIGINT,  _on_signal)
     loop.add_signal_handler(signal.SIGTERM, _on_signal)
@@ -899,6 +966,8 @@ async def main():
         await worker.run()
     except asyncio.CancelledError:
         log.info("Worker cancelled — goodbye.")
+    finally:
+        await worker.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
