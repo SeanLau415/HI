@@ -534,6 +534,10 @@
             <label for="target-url">链接 URL</label>
             <input id="target-url" type="text" required>
           </div>
+          <div class="field wide">
+            <label for="target-open-url">打开链接（可选：通知里给你点开的公开页面）</label>
+            <input id="target-open-url" type="text" placeholder="例如：https://nube.sh/zh-cn">
+          </div>
           <div class="field">
             <label for="target-mode">检测模式</label>
             <select id="target-mode">
@@ -634,6 +638,7 @@
       {
         name: "Nube FRA1 China-Optimized 1c1g",
         url: "https://fra-api.nube.sh/order/v1/order/product/info?businessType=VM&productId=&region=FRA",
+        open_url: "https://nube.sh/zh-cn",
         detection_mode: "content_hash",
         check_interval_minutes: 10,
         enabled: true,
@@ -775,7 +780,7 @@
         "status-bar", "apprise-urls", "global-interval", "global-heartbeat",
         "global-timeout", "global-delay-min", "global-delay-max", "targets-body",
         "feeds-body", "yaml-preview", "import-file", "target-dialog", "target-form",
-        "target-dialog-title", "target-name", "target-url", "target-mode",
+        "target-dialog-title", "target-name", "target-url", "target-open-url", "target-mode",
         "target-selector", "target-proxy", "target-interval", "target-enabled",
         "feed-dialog", "feed-form", "feed-dialog-title", "feed-name", "feed-url",
         "feed-keywords", "feed-proxy", "feed-interval", "feed-enabled",
@@ -852,6 +857,7 @@
       return {
         name: String(item.name ?? "").trim(),
         url: String(item.url ?? "").trim(),
+        open_url: String(item.open_url ?? "").trim(),
         detection_mode: String(item.detection_mode ?? "content_hash"),
         css_selector: String(item.css_selector ?? "").trim(),
         proxy: String(item.proxy ?? "").trim(),
@@ -1064,6 +1070,7 @@
       const item = isEdit ? state.targets[index] : {
         name: "",
         url: "",
+        open_url: "",
         detection_mode: "content_hash",
         css_selector: "",
         proxy: "",
@@ -1073,6 +1080,7 @@
       refs["target-dialog-title"].textContent = isEdit ? "编辑页面监控" : "新增页面监控";
       refs["target-name"].value = item.name || "";
       refs["target-url"].value = item.url || "";
+      refs["target-open-url"].value = item.open_url || "";
       refs["target-mode"].value = item.detection_mode || "content_hash";
       refs["target-selector"].value = item.css_selector || "";
       refs["target-proxy"].value = item.proxy || "";
@@ -1117,6 +1125,7 @@
       const item = normalizeTarget({
         name,
         url,
+        open_url: refs["target-open-url"].value.trim(),
         detection_mode: refs["target-mode"].value,
         css_selector: refs["target-selector"].value.trim(),
         proxy: refs["target-proxy"].value.trim(),
@@ -1375,6 +1384,7 @@
       data.targets.forEach((item) => {
         lines.push(`  - name: ${yamlString(item.name)}`);
         lines.push(`    url: ${yamlString(item.url)}`);
+        if (item.open_url) lines.push(`    open_url: ${yamlString(item.open_url)}`);
         lines.push(`    detection_mode: ${yamlString(item.detection_mode || "content_hash")}`);
         if (item.css_selector) lines.push(`    css_selector: ${yamlString(item.css_selector)}`);
         if (item.proxy) lines.push(`    proxy: ${yamlString(item.proxy)}`);

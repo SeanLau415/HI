@@ -70,6 +70,9 @@ def build_yaml(data: dict) -> str:
     for t in targets:
         lines.append(f"  - name: {_yaml_str(t.get('name', ''))}")
         lines.append(f"    url: {_yaml_str(t.get('url', ''))}")
+        open_url = t.get('open_url', '')
+        if open_url:
+            lines.append(f"    open_url: {_yaml_str(open_url)}")
         mode = t.get('detection_mode', 'selector_disappears')
         lines.append(f"    detection_mode: {_yaml_str(mode)}")
         selector = t.get('css_selector', '')
@@ -130,6 +133,7 @@ PRESET_PRECISE_TARGETS = [
     {
         "name": "Nube FRA1 China-Optimized 1c1g",
         "url": "https://fra-api.nube.sh/order/v1/order/product/info?businessType=VM&productId=&region=FRA",
+        "open_url": "https://nube.sh/zh-cn",
         "detection_mode": "content_hash",
         "check_interval_minutes": 10,
         "enabled": True,
@@ -353,6 +357,14 @@ class TargetDialog(tk.Toplevel):
                             font=("Courier", 10), width=50)
         self.url.pack(fill="x", padx=16, ipady=5)
 
+        tk.Label(self, text="打开链接  （可选：通知里给你点开的公开页面）", bg=DARK2, fg=TEXT2,
+                 font=("Helvetica", 9)).pack(anchor="w", **pad)
+        self.open_url = tk.Entry(self, bg=DARK3, fg=TEXT, insertbackground=TEXT,
+                                 relief="flat", bd=0, highlightthickness=1,
+                                 highlightbackground=BORDER, highlightcolor=ACCENT,
+                                 font=("Courier", 10), width=50)
+        self.open_url.pack(fill="x", padx=16, ipady=5)
+
         tk.Label(self, text="检测模式", bg=DARK2, fg=TEXT2,
                  font=("Helvetica", 9)).pack(anchor="w", **pad)
         self.mode_var = tk.StringVar(value="selector_disappears")
@@ -404,6 +416,7 @@ class TargetDialog(tk.Toplevel):
         if existing:
             self.name.insert(0, existing.get("name", ""))
             self.url.insert(0, existing.get("url", ""))
+            self.open_url.insert(0, existing.get("open_url", ""))
             self.mode_var.set(existing.get("detection_mode", "selector_disappears"))
             self.selector.insert(0, existing.get("css_selector", ""))
             self.proxy.insert(0, existing.get("proxy", ""))
@@ -428,6 +441,7 @@ class TargetDialog(tk.Toplevel):
         self.result = {
             "name": name,
             "url": url,
+            "open_url": self.open_url.get().strip(),
             "detection_mode": self.mode_var.get(),
             "css_selector": self.selector.get().strip(),
             "proxy": self.proxy.get().strip(),

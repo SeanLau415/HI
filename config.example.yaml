@@ -72,6 +72,7 @@ targets:
   # This is the best public source for that tuple, although it is region-scoped.
   - name: "Nube FRA1 China-Optimized 1c1g"
     url: "https://fra-api.nube.sh/order/v1/order/product/info?businessType=VM&productId=&region=FRA"
+    open_url: "https://nube.sh/zh-cn"
     detection_mode: content_hash
     enabled: true
     check_interval_minutes: 10

@@ -34,6 +34,7 @@ All bugs fixed (cumulative):
 """
 import asyncio
 import hashlib
+import json
 import logging
 import logging.handlers
 import os
@@ -103,6 +104,7 @@ SEEN_RETENTION_DAYS   = 30
 MEMORY_MAX_SEEN       = 5000
 MEMORY_MAX_HASHES     = 1000
 MAX_RESPONSE_BYTES    = 5 * 1024 * 1024
+CONTENT_HASH_VERSION  = 2
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -132,6 +134,7 @@ class GlobalConfig:
 class TargetConfig:
     name: str
     url: str
+    open_url: str                  = ""
     detection_mode: str           = "selector_disappears"
     css_selector: str             = ""
     proxy: str                    = ""
@@ -211,6 +214,7 @@ def load_config(path: Path) -> AppConfig:
         TargetConfig(
             name                   = str(t.get("name","Unknown")),
             url                    = str(t.get("url","")),
+            open_url               = str(t.get("open_url","")),
             detection_mode         = str(t.get("detection_mode","selector_disappears")),
             css_selector           = str(t.get("css_selector","")),
             proxy                  = str(t.get("proxy","")),
@@ -329,7 +333,7 @@ class Database:
 
     def _sync_get_content_hash(self, url: str) -> Optional[str]:
         url_md5  = hashlib.md5(url.encode()).hexdigest()
-        pattern  = f"hashval:{url_md5}:%"
+        pattern  = f"hashval:v{CONTENT_HASH_VERSION}:{url_md5}:%"
         row = self._conn.execute(
             "SELECT key FROM seen WHERE key LIKE ?", (pattern,)
         ).fetchone()
@@ -341,13 +345,13 @@ class Database:
             (datetime.utcnow().isoformat(), row[0])
         )
         self._conn.commit()
-        parts = row[0].split(":", 2)
-        return parts[2] if len(parts) == 3 else None
+        parts = row[0].split(":", 3)
+        return parts[3] if len(parts) == 4 else None
 
     def _sync_set_content_hash(self, url: str, new_hash: str):
         url_md5  = hashlib.md5(url.encode()).hexdigest()
-        hash_key = f"hashval:{url_md5}:{new_hash}"
-        pattern  = f"hashval:{url_md5}:%"
+        hash_key = f"hashval:v{CONTENT_HASH_VERSION}:{url_md5}:{new_hash}"
+        pattern  = f"hashval:v{CONTENT_HASH_VERSION}:{url_md5}:%"
         self._conn.execute("DELETE FROM seen WHERE key LIKE ?", (pattern,))
         self._conn.execute(
             "INSERT INTO seen (key, first_seen) VALUES (?,?)",
@@ -503,6 +507,11 @@ def build_apprise(urls: list[str]) -> apprise.Apprise:
     for url in urls:
         if url: ap.add(url)
     return ap
+
+
+def target_open_url(target: TargetConfig) -> str:
+    open_url = (target.open_url or "").strip()
+    return open_url if open_url else target.url
 
 async def notify(
     ap: apprise.Apprise,
@@ -662,6 +671,40 @@ async def fetch_with_retry(
 
 def _visible_text_hash(html: str) -> str:
     """SHA-256 of visible text. CPU-intensive — via run_in_executor."""
+    stripped = html.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            obj = json.loads(stripped)
+            volatile_keys = {
+                "versionname", "versioncode", "updatetime", "timestamp",
+                "requestid", "traceid", "nonce", "token", "sign", "signature",
+                "sessionid", "session", "rayid", "requesttime", "servertime",
+            }
+
+            def normalize_json(value):
+                if isinstance(value, dict):
+                    out = {}
+                    for key, item in value.items():
+                        key_l = str(key).lower()
+                        if key_l in volatile_keys or key_l.endswith("time"):
+                            continue
+                        out[key] = normalize_json(item)
+                    return out
+                if isinstance(value, list):
+                    return [normalize_json(item) for item in value]
+                return value
+
+            normalized = normalize_json(obj)
+            payload = json.dumps(
+                normalized,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            return hashlib.sha256(payload.encode()).hexdigest()
+        except Exception:
+            pass
+
     soup = BeautifulSoup(html, "lxml")
     for tag in soup(["script","style","meta","link","noscript","head"]):
         tag.decompose()
@@ -777,12 +820,12 @@ async def check_target(
             elif old_hash == new_hash:
                 log.debug(f"[Target] No change: {target.name}")
             else:
-                page_title = await _run_parse_job(worker, _page_title, html, target.url)
+                page_title = await _run_parse_job(worker, _page_title, html, target.name)
+                open_url = target_open_url(target)
                 success = await notify(ap,
                     title=f"🔔 Page Changed: {target.name}",
-                    body=(f"**{target.name}** content has changed — check for stock!\n\n"
-                          f"🌐 {target.url}\n📄 {page_title}\n⏰ {ts}\n\n"
-                          f"[Open page]({target.url})"),
+                    body=(f"{target.name} content has changed — check for stock!\n\n"
+                          f"🌐 {open_url}\n📄 {page_title}\n⏰ {ts}"),
                     notify_type=apprise.NotifyType.SUCCESS)
                 if success:
                     await db.set_content_hash(target.url, new_hash)
@@ -802,12 +845,13 @@ async def check_target(
             if in_stock:
                 is_new = await db.check_and_mark(db_key)
                 if is_new:
-                    page_title = await _run_parse_job(worker, _page_title, html, target.url)
+                    page_title = await _run_parse_job(worker, _page_title, html, target.name)
+                    open_url = target_open_url(target)
                     success = await notify(ap,
                         title=f"✅ IN STOCK: {target.name}",
-                        body=(f"**{target.name}** is now available!\n\n"
-                              f"🌐 {target.url}\n📄 {page_title}\n"
-                              f"🔍 {detail}\n⏰ {ts}\n\n👉 [Buy Now]({target.url})"),
+                        body=(f"{target.name} is now available!\n\n"
+                              f"🌐 {open_url}\n📄 {page_title}\n"
+                              f"🔍 {detail}\n⏰ {ts}"),
                         notify_type=apprise.NotifyType.SUCCESS)
                     if not success:
                         await db.delete_key(db_key)
@@ -882,11 +926,11 @@ async def check_feed(
         link    = entry.get("link","")
         summary = await _run_parse_job(worker, _strip_html, entry.get("summary",""))
         pub     = (entry.get("published") or entry.get("updated") or "")[:25]
-        kw_line = f"🏷 `{', '.join(feed.keywords)}`\n" if feed.keywords else ""
+        kw_line = f"🏷 {', '.join(feed.keywords)}\n" if feed.keywords else ""
 
         success = await notify(ap,
             title=f"📡 [{feed.name}] {title[:60]}",
-            body=(f"**{title}**\n\n{kw_line}📅 {pub}\n📝 {summary}\n\n🔗 [Read more]({link})"),
+            body=(f"{title}\n\n{kw_line}📅 {pub}\n📝 {summary}\n\n🔗 {link}"),
             notify_type=apprise.NotifyType.INFO)
         if not success:
             await db.delete_key(db_key)
