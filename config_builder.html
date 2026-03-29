@@ -1,0 +1,1563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>监控配置可视化编辑器</title>
+  <style>
+    :root {
+      --bg: #08111f;
+      --panel: rgba(9, 21, 34, 0.9);
+      --line: rgba(138, 170, 198, 0.16);
+      --text: #ecf4ff;
+      --muted: #8ca2bd;
+      --cyan: #79d7ff;
+      --mint: #6be4a8;
+      --amber: #f6b55c;
+      --red: #ff7171;
+      --ink: #041019;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      --radius: 24px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(121, 215, 255, 0.18), transparent 30%),
+        radial-gradient(circle at top right, rgba(107, 228, 168, 0.14), transparent 26%),
+        linear-gradient(160deg, #07101d 0%, #091a2d 52%, #08111f 100%);
+      color: var(--text);
+    }
+
+    body { padding: 28px; }
+
+    .shell { max-width: 1520px; margin: 0 auto; }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.3fr 0.7fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .hero-card,
+    .panel,
+    dialog::backdrop { backdrop-filter: blur(16px); }
+
+    .hero-card {
+      background: linear-gradient(145deg, rgba(10, 25, 40, 0.96), rgba(7, 16, 29, 0.94));
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      padding: 26px 28px;
+    }
+
+    .hero h1 { margin: 0 0 8px; font-size: 34px; letter-spacing: 0.02em; }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+      max-width: 760px;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(121, 215, 255, 0.24);
+      background: rgba(121, 215, 255, 0.08);
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .stat {
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: linear-gradient(160deg, rgba(12, 30, 47, 0.9), rgba(10, 18, 29, 0.96));
+      min-height: 124px;
+    }
+
+    .stat-label { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+    .stat-value { font-size: 28px; font-weight: 700; letter-spacing: 0.03em; }
+    .stat small { display: block; margin-top: 8px; color: var(--muted); line-height: 1.45; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 440px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .stack { display: grid; gap: 18px; }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+
+    .panel h2 { margin: 0; font-size: 20px; letter-spacing: 0.02em; }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .panel-sub { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 8px 0 0; }
+
+    .toolbar,
+    .toolbar-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .btn {
+      appearance: none;
+      border: 0;
+      outline: none;
+      cursor: pointer;
+      padding: 11px 15px;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary { background: linear-gradient(135deg, var(--cyan), #4ca0ff); color: var(--ink); }
+    .btn-success { background: linear-gradient(135deg, var(--mint), #53c891); color: #052014; }
+    .btn-warn { background: linear-gradient(135deg, var(--amber), #f58d4c); color: #2c1602; }
+    .btn-danger { background: linear-gradient(135deg, #ff8a8a, var(--red)); color: #2b0909; }
+    .btn-ghost { background: rgba(121, 215, 255, 0.08); border: 1px solid rgba(121, 215, 255, 0.2); color: var(--text); }
+
+    .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .field { display: grid; gap: 8px; }
+    .field label { font-size: 13px; color: var(--muted); letter-spacing: 0.02em; }
+
+    input[type="text"],
+    input[type="number"],
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid rgba(138, 170, 198, 0.18);
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: rgba(3, 10, 17, 0.55);
+      color: var(--text);
+      font: inherit;
+      outline: none;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      border-color: rgba(121, 215, 255, 0.6);
+      box-shadow: 0 0 0 4px rgba(121, 215, 255, 0.12);
+    }
+
+    textarea { resize: vertical; min-height: 112px; line-height: 1.55; }
+    .wide { grid-column: 1 / -1; }
+
+    .callout,
+    .status-bar {
+      padding: 14px 16px;
+      border-radius: 16px;
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    .callout {
+      margin-top: 14px;
+      border: 1px solid rgba(246, 181, 92, 0.22);
+      background: rgba(246, 181, 92, 0.08);
+      color: #ffe3b8;
+    }
+
+    .status-bar {
+      margin-top: 12px;
+      background: rgba(121, 215, 255, 0.08);
+      border: 1px solid rgba(121, 215, 255, 0.16);
+      color: #cae9ff;
+    }
+
+    .table-shell {
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(138, 170, 198, 0.16);
+      background: rgba(2, 9, 16, 0.58);
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+
+    th,
+    td {
+      text-align: left;
+      padding: 14px;
+      vertical-align: top;
+      border-bottom: 1px solid rgba(138, 170, 198, 0.1);
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      background: rgba(7, 16, 27, 0.72);
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .name-cell strong { display: block; font-size: 15px; margin-bottom: 5px; }
+    .name-cell small { display: block; color: var(--muted); line-height: 1.5; word-break: break-all; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 7px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .pill-blue {
+      color: var(--cyan);
+      background: rgba(121, 215, 255, 0.12);
+      border: 1px solid rgba(121, 215, 255, 0.2);
+    }
+
+    .pill-green {
+      color: var(--mint);
+      background: rgba(107, 228, 168, 0.12);
+      border: 1px solid rgba(107, 228, 168, 0.22);
+    }
+
+    .pill-gray {
+      color: var(--muted);
+      background: rgba(138, 170, 198, 0.08);
+      border: 1px solid rgba(138, 170, 198, 0.14);
+    }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .icon-btn {
+      border: 0;
+      border-radius: 12px;
+      padding: 9px 12px;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      background: rgba(121, 215, 255, 0.1);
+      color: var(--text);
+    }
+
+    .icon-btn[data-tone="danger"] {
+      background: rgba(255, 113, 113, 0.1);
+      color: #ffd7d7;
+    }
+
+    .empty-state {
+      padding: 26px 18px;
+      text-align: center;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .preview {
+      min-height: 420px;
+      background: linear-gradient(180deg, rgba(4, 11, 19, 0.9), rgba(3, 8, 15, 0.98));
+      border-radius: 18px;
+      border: 1px solid rgba(121, 215, 255, 0.14);
+      padding: 18px;
+      overflow: auto;
+      font-family: "Consolas", "SFMono-Regular", monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      color: #b8ffcd;
+      word-break: break-word;
+    }
+
+    dialog {
+      width: min(680px, calc(100vw - 32px));
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 0;
+      background: linear-gradient(180deg, rgba(10, 22, 35, 0.98), rgba(7, 15, 25, 0.98));
+      color: var(--text);
+      box-shadow: var(--shadow);
+    }
+
+    dialog::backdrop { background: rgba(3, 8, 15, 0.72); }
+
+    .dialog-head,
+    .dialog-body,
+    .dialog-foot { padding: 20px 22px; }
+
+    .dialog-head { border-bottom: 1px solid var(--line); }
+    .dialog-head h3 { margin: 0 0 6px; font-size: 22px; }
+    .dialog-head p { margin: 0; color: var(--muted); line-height: 1.6; font-size: 13px; }
+    .dialog-foot { display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--line); }
+
+    .checkline { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+    .checkline input { width: 18px; height: 18px; accent-color: #7adfff; }
+
+    .sr-only,
+    #selftest-output {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+
+    @media (max-width: 1180px) {
+      .hero,
+      .layout { grid-template-columns: 1fr; }
+
+      .field-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="hero-card">
+        <h1>监控配置可视化编辑器</h1>
+        <p>这是一个完全独立的单文件配置器。你只需要双击打开这个 HTML 文件，就能可视化编辑页面监控、RSS 订阅和通知地址，然后直接导出 <code>config.yaml</code>，不需要 Python、pip、Node 或任何后台服务。</p>
+        <div class="badge-row">
+          <span class="badge">浏览器直接打开</span>
+          <span class="badge">中文可视化界面</span>
+          <span class="badge">支持 YAML 导入导出</span>
+          <span class="badge">内置精准模板</span>
+        </div>
+      </div>
+      <div class="hero-stats">
+        <div class="stat">
+          <div class="stat-label">通知地址</div>
+          <div class="stat-value" id="stat-apprise">0</div>
+          <small>每行一个，支持 <code>tgram://</code>、<code>mailto://</code> 等。</small>
+        </div>
+        <div class="stat">
+          <div class="stat-label">页面监控</div>
+          <div class="stat-value" id="stat-targets">0 / 0</div>
+          <small>格式为“已启用 / 总数”。页面变化、按钮出现、标记消失都能监控。</small>
+        </div>
+        <div class="stat">
+          <div class="stat-label">RSS 订阅</div>
+          <div class="stat-value" id="stat-feeds">0 / 0</div>
+          <small>支持无关键词全量订阅，也支持按关键词过滤新文章。</small>
+        </div>
+        <div class="stat">
+          <div class="stat-label">当前状态</div>
+          <div class="stat-value" id="stat-state">待配置</div>
+          <small id="stat-note">建议先载入模板，再替换成你自己的真实链接。</small>
+        </div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>快速配置</h2>
+              <p class="panel-sub">针对你当前场景准备的快捷按钮：预填 4 个精准目标、4 个北美大学课程 RSS，另保留 1 个 VPS 占位和 1 个 RSS 占位，再加 5 个 Twitch / 游戏公告页。</p>
+            </div>
+          </div>
+          <div class="toolbar-wrap">
+            <button class="btn btn-success" id="load-template-btn" type="button">载入精准模板</button>
+            <button class="btn btn-primary" id="add-twitch-btn" type="button">加入 Twitch 套餐</button>
+            <button class="btn btn-primary" id="add-vps-btn" type="button">新增 5 个 VPS 占位</button>
+            <button class="btn btn-primary" id="add-rss-btn" type="button">新增 5 个 RSS 占位</button>
+            <button class="btn btn-danger" id="clear-all-btn" type="button">清空页面与订阅</button>
+          </div>
+          <div class="callout">
+            模板里的前 4 个页面和前 4 个 RSS 已经按你的需求预填。额外保留的 1 个 VPS 占位和 1 个 RSS 占位默认关闭，你只需要把 <code>example.com</code> 链接改成自己的真实链接，再把该行启用即可。
+          </div>
+          <div class="status-bar" id="status-bar">建议先点击“载入精准模板”，再编辑列表中的名称和链接。</div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>全局设置</h2>
+              <p class="panel-sub">这里控制默认轮询间隔、心跳、超时、重试延迟以及通知地址。单个页面或 RSS 可以覆盖默认间隔。</p>
+            </div>
+          </div>
+
+          <div class="field wide">
+            <label for="apprise-urls">通知地址（每行一个）</label>
+            <textarea id="apprise-urls" placeholder="例如：&#10;tgram://BOT_TOKEN/CHAT_ID&#10;mailto://user:app-password@gmail.com?to=you@gmail.com"></textarea>
+          </div>
+
+          <div class="field-grid" style="margin-top: 14px;">
+            <div class="field">
+              <label for="global-interval">默认轮询间隔（分钟）</label>
+              <input id="global-interval" type="number" min="1" value="30">
+            </div>
+            <div class="field">
+              <label for="global-heartbeat">心跳间隔（小时）</label>
+              <input id="global-heartbeat" type="number" min="0" value="24">
+            </div>
+            <div class="field">
+              <label for="global-timeout">请求超时（秒）</label>
+              <input id="global-timeout" type="number" min="1" value="30">
+            </div>
+            <div class="field">
+              <label for="global-delay-min">重试延迟最小值（秒）</label>
+              <input id="global-delay-min" type="number" min="0" step="0.1" value="1.0">
+            </div>
+            <div class="field">
+              <label for="global-delay-max">重试延迟最大值（秒）</label>
+              <input id="global-delay-max" type="number" min="0" step="0.1" value="3.0">
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>页面监控目标</h2>
+              <p class="panel-sub">适合 VPS 页面、Twitch 掉宝公告页、官方新闻页等。你可以用页面文本变化，也可以用 CSS 选择器出现 / 消失来触发提醒。</p>
+            </div>
+            <div class="toolbar">
+              <button class="btn btn-primary" id="new-target-btn" type="button">新增页面</button>
+            </div>
+          </div>
+          <div class="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称与链接</th>
+                  <th>模式</th>
+                  <th>间隔</th>
+                  <th>启用</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="targets-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>RSS 订阅</h2>
+              <p class="panel-sub">适合博客、论坛、新闻、公告源。关键词留空时会接收该 RSS 的全部新内容；填关键词时只推送命中的新条目。</p>
+            </div>
+            <div class="toolbar">
+              <button class="btn btn-primary" id="new-feed-btn" type="button">新增 RSS</button>
+            </div>
+          </div>
+          <div class="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>名称与链接</th>
+                  <th>关键词</th>
+                  <th>间隔</th>
+                  <th>启用</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="feeds-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>YAML 预览</h2>
+              <p class="panel-sub">这里显示即将导出的真实 <code>config.yaml</code> 内容。任何修改都会即时反映到预览中。</p>
+            </div>
+            <div class="toolbar">
+              <button class="btn btn-success" id="export-btn" type="button">导出 config.yaml</button>
+              <button class="btn btn-warn" id="import-btn" type="button">加载 config.yaml</button>
+            </div>
+          </div>
+          <div class="preview" id="yaml-preview"></div>
+          <input id="import-file" type="file" accept=".yaml,.yml,text/yaml,text/plain" class="sr-only">
+        </section>
+      </div>
+    </section>
+  </div>
+  <dialog id="target-dialog">
+    <form method="dialog" id="target-form">
+      <div class="dialog-head">
+        <h3 id="target-dialog-title">新增页面</h3>
+        <p>适用于 VPS 商品页、官方公告页、Twitch 掉宝页、商家活动页等。</p>
+      </div>
+      <div class="dialog-body">
+        <div class="field-grid">
+          <div class="field wide">
+            <label for="target-name">名称</label>
+            <input id="target-name" type="text" required>
+          </div>
+          <div class="field wide">
+            <label for="target-url">链接 URL</label>
+            <input id="target-url" type="text" required>
+          </div>
+          <div class="field">
+            <label for="target-mode">检测模式</label>
+            <select id="target-mode">
+              <option value="content_hash">页面文本变化 → 直接提醒</option>
+              <option value="selector_appears">选择器出现 → 视为有货</option>
+              <option value="selector_disappears">选择器消失 → 视为有货</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="target-interval">单项轮询间隔（分钟，可留空）</label>
+            <input id="target-interval" type="number" min="1" placeholder="留空则使用全局">
+          </div>
+          <div class="field wide">
+            <label for="target-selector">CSS 选择器（仅选择器模式需要）</label>
+            <input id="target-selector" type="text" placeholder='例如：.out-of-stock 或 button[data-action="add-to-cart"]'>
+          </div>
+          <div class="field wide">
+            <label for="target-proxy">代理（可选）</label>
+            <input id="target-proxy" type="text" placeholder="例如：socks5://user:pass@host:port">
+          </div>
+        </div>
+        <label class="checkline">
+          <input id="target-enabled" type="checkbox" checked>
+          <span>启用这个页面监控</span>
+        </label>
+      </div>
+      <div class="dialog-foot">
+        <button class="btn btn-ghost" id="target-cancel-btn" type="button">取消</button>
+        <button class="btn btn-success" id="target-save-btn" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="feed-dialog">
+    <form method="dialog" id="feed-form">
+      <div class="dialog-head">
+        <h3 id="feed-dialog-title">新增 RSS</h3>
+        <p>适用于博客、论坛、新闻、公告源等。关键词可以为空，为空时表示接收该订阅的全部新内容。</p>
+      </div>
+      <div class="dialog-body">
+        <div class="field-grid">
+          <div class="field wide">
+            <label for="feed-name">名称</label>
+            <input id="feed-name" type="text" required>
+          </div>
+          <div class="field wide">
+            <label for="feed-url">订阅链接 URL</label>
+            <input id="feed-url" type="text" required>
+          </div>
+          <div class="field wide">
+            <label for="feed-keywords">关键词（逗号分隔，可留空）</label>
+            <input id="feed-keywords" type="text" placeholder="例如：annual, KVM, sale, twitch, drop">
+          </div>
+          <div class="field">
+            <label for="feed-interval">单项轮询间隔（分钟，可留空）</label>
+            <input id="feed-interval" type="number" min="1" placeholder="留空则使用全局">
+          </div>
+          <div class="field">
+            <label for="feed-proxy">代理（可选）</label>
+            <input id="feed-proxy" type="text" placeholder="例如：socks5://user:pass@host:port">
+          </div>
+        </div>
+        <label class="checkline">
+          <input id="feed-enabled" type="checkbox" checked>
+          <span>启用这个 RSS 订阅</span>
+        </label>
+      </div>
+      <div class="dialog-foot">
+        <button class="btn btn-ghost" id="feed-cancel-btn" type="button">取消</button>
+        <button class="btn btn-success" id="feed-save-btn" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <pre id="selftest-output"></pre>
+  <script>
+    const MODE_TEXT = {
+      selector_disappears: "消失触发",
+      selector_appears: "出现触发",
+      content_hash: "文本变化",
+    };
+
+    const PRESET_PRECISE_TARGETS = [
+      {
+        name: "BuyVM LV RYZEN KVM 512MB",
+        url: "https://my.frantech.ca/cart.php?a=add&pid=1439",
+        detection_mode: "content_hash",
+        check_interval_minutes: 10,
+        enabled: true,
+      },
+      {
+        name: "BuyVM LV RYZEN KVM 1GB",
+        url: "https://my.frantech.ca/cart.php?a=add&pid=1411",
+        detection_mode: "content_hash",
+        check_interval_minutes: 10,
+        enabled: true,
+      },
+      {
+        name: "Nube FRA1 China-Optimized 1c1g",
+        url: "https://fra-api.nube.sh/order/v1/order/product/info?businessType=VM&productId=&region=FRA",
+        detection_mode: "content_hash",
+        check_interval_minutes: 10,
+        enabled: true,
+      },
+      {
+        name: "VMISS US.LA.TRI.Basic",
+        url: "https://app.vmiss.com/store/us-los-angeles-tri/basic",
+        detection_mode: "content_hash",
+        check_interval_minutes: 10,
+        enabled: true,
+      },
+    ];
+
+    const PRESET_UNIVERSITY_FEEDS = [
+      {
+        name: "UCLA Extension Program News",
+        url: "https://newsroom.uclaextension.edu/cats/program_news.xml",
+        keywords: ["course", "courses", "class", "certificate", "training", "career technical education", "vetjet", "olli", "paralegal"],
+        check_interval_minutes: 720,
+        enabled: true,
+      },
+      {
+        name: "UBC Extended Learning",
+        url: "https://extendedlearning.ubc.ca/rss.xml",
+        keywords: [],
+        check_interval_minutes: 720,
+        enabled: true,
+      },
+      {
+        name: "Arizona Continuing Education",
+        url: "https://ce.arizona.edu/rss.xml",
+        keywords: ["certificate program", "certificate", "bootcamp", "workshop"],
+        check_interval_minutes: 720,
+        enabled: true,
+      },
+      {
+        name: "George Mason CPE",
+        url: "https://content.sitemasonry.gmu.edu/taxonomy/term/27456/feed",
+        keywords: ["career academy", "industry certificates", "micro-credential", "micro-credentials"],
+        check_interval_minutes: 720,
+        enabled: true,
+      },
+    ];
+
+    const TWITCH_OFFICIAL_TARGETS = [
+      {
+        name: "魔兽世界 Twitch 掉宝",
+        url: "https://worldofwarcraft.blizzard.com/en-us/search?keyword=twitch",
+        detection_mode: "content_hash",
+        check_interval_minutes: 60,
+        enabled: true,
+      },
+      {
+        name: "流放之路 1 Twitch 掉宝",
+        url: "https://www.pathofexile.com/twitchdrops",
+        detection_mode: "content_hash",
+        check_interval_minutes: 60,
+        enabled: true,
+      },
+      {
+        name: "流放之路 2 Twitch 掉宝",
+        url: "https://pathofexile2.com/twitchdrops",
+        detection_mode: "content_hash",
+        check_interval_minutes: 60,
+        enabled: true,
+      },
+      {
+        name: "守望先锋新闻",
+        url: "https://overwatch.blizzard.com/en-us/news/",
+        detection_mode: "content_hash",
+        check_interval_minutes: 60,
+        enabled: true,
+      },
+      {
+        name: "星际战甲 Twitch 搜索",
+        url: "https://www.warframe.com/en/news?search=twitch",
+        detection_mode: "content_hash",
+        check_interval_minutes: 60,
+        enabled: true,
+      },
+    ];
+
+    function deepClone(value) {
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function makeVpsPlaceholders(count = 5, start = 1) {
+      return Array.from({ length: count }, (_, idx) => ({
+        name: `VPS 页面 ${start + idx}`,
+        url: `https://example.com/vps-${start + idx}`,
+        detection_mode: "content_hash",
+        check_interval_minutes: 10,
+        enabled: false,
+      }));
+    }
+
+    function makeRssPlaceholders(count = 5, start = 1) {
+      return Array.from({ length: count }, (_, idx) => ({
+        name: `RSS 订阅 ${start + idx}`,
+        url: `https://example.com/feed-${start + idx}.xml`,
+        keywords: [],
+        check_interval_minutes: 720,
+        enabled: false,
+      }));
+    }
+
+    function defaultState() {
+      return {
+        global: {
+          apprise_urls: [],
+          check_interval_minutes: 30,
+          heartbeat_interval_hours: 24,
+          request_timeout: 30,
+          randomize_delay_min: 1.0,
+          randomize_delay_max: 3.0,
+        },
+        targets: [],
+        rss_feeds: [],
+      };
+    }
+
+    let state = defaultState();
+    let editingTargetIndex = null;
+    let editingFeedIndex = null;
+    const refs = {};
+
+    document.addEventListener("DOMContentLoaded", () => {
+      bindRefs();
+      bindEvents();
+      syncGlobalsFromState();
+      renderAll();
+      maybeRunSelfTest();
+      document.body.dataset.ready = "1";
+    });
+
+    function bindRefs() {
+      [
+        "stat-apprise", "stat-targets", "stat-feeds", "stat-state", "stat-note",
+        "status-bar", "apprise-urls", "global-interval", "global-heartbeat",
+        "global-timeout", "global-delay-min", "global-delay-max", "targets-body",
+        "feeds-body", "yaml-preview", "import-file", "target-dialog", "target-form",
+        "target-dialog-title", "target-name", "target-url", "target-mode",
+        "target-selector", "target-proxy", "target-interval", "target-enabled",
+        "feed-dialog", "feed-form", "feed-dialog-title", "feed-name", "feed-url",
+        "feed-keywords", "feed-proxy", "feed-interval", "feed-enabled",
+        "selftest-output"
+      ].forEach((id) => {
+        refs[id] = document.getElementById(id);
+      });
+    }
+
+    function bindEvents() {
+      document.getElementById("load-template-btn").addEventListener("click", loadTemplate);
+      document.getElementById("add-twitch-btn").addEventListener("click", addTwitchBundle);
+      document.getElementById("add-vps-btn").addEventListener("click", addVpsSlots);
+      document.getElementById("add-rss-btn").addEventListener("click", addRssSlots);
+      document.getElementById("clear-all-btn").addEventListener("click", clearTargetsAndFeeds);
+      document.getElementById("new-target-btn").addEventListener("click", () => openTargetDialog());
+      document.getElementById("new-feed-btn").addEventListener("click", () => openFeedDialog());
+      document.getElementById("export-btn").addEventListener("click", exportConfig);
+      document.getElementById("import-btn").addEventListener("click", () => refs["import-file"].click());
+      refs["import-file"].addEventListener("change", importConfig);
+
+      [
+        refs["apprise-urls"],
+        refs["global-interval"],
+        refs["global-heartbeat"],
+        refs["global-timeout"],
+        refs["global-delay-min"],
+        refs["global-delay-max"],
+      ].forEach((node) => {
+        node.addEventListener("input", () => {
+          syncStateFromGlobals();
+          renderDashboard();
+          renderPreview();
+        });
+      });
+
+      refs["target-form"].addEventListener("submit", saveTarget);
+      refs["feed-form"].addEventListener("submit", saveFeed);
+      document.getElementById("target-cancel-btn").addEventListener("click", () => refs["target-dialog"].close());
+      document.getElementById("feed-cancel-btn").addEventListener("click", () => refs["feed-dialog"].close());
+    }
+
+    function toInt(value, fallback) {
+      const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function toFloat(value, fallback) {
+      const parsed = Number.parseFloat(String(value ?? "").trim());
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function asStringList(value) {
+      if (typeof value === "string") {
+        return value.trim() ? [value.trim()] : [];
+      }
+      if (Array.isArray(value)) {
+        return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+      }
+      return [];
+    }
+
+    function asKeywordList(value) {
+      if (typeof value === "string") {
+        return value.split(",").map((item) => item.trim()).filter(Boolean);
+      }
+      if (Array.isArray(value)) {
+        return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+      }
+      return [];
+    }
+
+    function normalizeTarget(item = {}) {
+      return {
+        name: String(item.name ?? "").trim(),
+        url: String(item.url ?? "").trim(),
+        detection_mode: String(item.detection_mode ?? "content_hash"),
+        css_selector: String(item.css_selector ?? "").trim(),
+        proxy: String(item.proxy ?? "").trim(),
+        check_interval_minutes: item.check_interval_minutes === "" || item.check_interval_minutes == null
+          ? null
+          : toInt(item.check_interval_minutes, null),
+        enabled: item.enabled !== false,
+      };
+    }
+
+    function normalizeFeed(item = {}) {
+      return {
+        name: String(item.name ?? "").trim(),
+        url: String(item.url ?? "").trim(),
+        keywords: asKeywordList(item.keywords),
+        proxy: String(item.proxy ?? "").trim(),
+        check_interval_minutes: item.check_interval_minutes === "" || item.check_interval_minutes == null
+          ? null
+          : toInt(item.check_interval_minutes, null),
+        enabled: item.enabled !== false,
+      };
+    }
+
+    function normalizeState(raw = {}) {
+      const globalRaw = raw.global && typeof raw.global === "object" ? raw.global : {};
+      const targetsRaw = Array.isArray(raw.targets) ? raw.targets : [];
+      const feedsRaw = Array.isArray(raw.rss_feeds) ? raw.rss_feeds : [];
+      return {
+        global: {
+          apprise_urls: asStringList(globalRaw.apprise_urls),
+          check_interval_minutes: toInt(globalRaw.check_interval_minutes, 30),
+          heartbeat_interval_hours: toInt(globalRaw.heartbeat_interval_hours, 24),
+          request_timeout: toInt(globalRaw.request_timeout, 30),
+          randomize_delay_min: toFloat(globalRaw.randomize_delay_min, 1.0),
+          randomize_delay_max: toFloat(globalRaw.randomize_delay_max, 3.0),
+        },
+        targets: targetsRaw.filter((item) => item && typeof item === "object").map(normalizeTarget),
+        rss_feeds: feedsRaw.filter((item) => item && typeof item === "object").map(normalizeFeed),
+      };
+    }
+
+    function syncGlobalsFromState() {
+      refs["apprise-urls"].value = state.global.apprise_urls.join("\n");
+      refs["global-interval"].value = String(state.global.check_interval_minutes);
+      refs["global-heartbeat"].value = String(state.global.heartbeat_interval_hours);
+      refs["global-timeout"].value = String(state.global.request_timeout);
+      refs["global-delay-min"].value = String(state.global.randomize_delay_min);
+      refs["global-delay-max"].value = String(state.global.randomize_delay_max);
+    }
+
+    function syncStateFromGlobals() {
+      state.global.apprise_urls = refs["apprise-urls"].value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      state.global.check_interval_minutes = toInt(refs["global-interval"].value, 30);
+      state.global.heartbeat_interval_hours = toInt(refs["global-heartbeat"].value, 24);
+      state.global.request_timeout = toInt(refs["global-timeout"].value, 30);
+      state.global.randomize_delay_min = toFloat(refs["global-delay-min"].value, 1.0);
+      state.global.randomize_delay_max = toFloat(refs["global-delay-max"].value, 3.0);
+    }
+
+    function renderAll() {
+      syncStateFromGlobals();
+      renderTargets();
+      renderFeeds();
+      renderDashboard();
+      renderPreview();
+    }
+
+    function renderTargets() {
+      refs["targets-body"].innerHTML = "";
+      if (!state.targets.length) {
+        refs["targets-body"].appendChild(makeEmptyRow("还没有页面监控目标。可以点击“新增页面”，或者直接载入精准模板。", 5));
+        return;
+      }
+      state.targets.forEach((target, index) => {
+        const row = document.createElement("tr");
+        const nameTd = document.createElement("td");
+        nameTd.className = "name-cell";
+        const strong = document.createElement("strong");
+        strong.textContent = target.name || "未命名页面";
+        const small = document.createElement("small");
+        small.textContent = target.url || "(未填写 URL)";
+        nameTd.append(strong, small);
+
+        const modeTd = document.createElement("td");
+        modeTd.appendChild(makePill(MODE_TEXT[target.detection_mode] || target.detection_mode, "pill-blue"));
+
+        const intervalTd = document.createElement("td");
+        intervalTd.textContent = target.check_interval_minutes ? `${target.check_interval_minutes} 分钟` : "全局";
+
+        const enabledTd = document.createElement("td");
+        enabledTd.appendChild(makePill(target.enabled ? "已启用" : "未启用", target.enabled ? "pill-green" : "pill-gray"));
+
+        const actionsTd = document.createElement("td");
+        actionsTd.className = "actions";
+        actionsTd.append(
+          makeActionButton("编辑", () => openTargetDialog(index)),
+          makeActionButton("删除", () => removeTarget(index), "danger")
+        );
+
+        row.append(nameTd, modeTd, intervalTd, enabledTd, actionsTd);
+        refs["targets-body"].appendChild(row);
+      });
+    }
+
+    function renderFeeds() {
+      refs["feeds-body"].innerHTML = "";
+      if (!state.rss_feeds.length) {
+        refs["feeds-body"].appendChild(makeEmptyRow("还没有 RSS 订阅。可以点击“新增 RSS”，或者直接载入精准模板。", 5));
+        return;
+      }
+      state.rss_feeds.forEach((feed, index) => {
+        const row = document.createElement("tr");
+        const nameTd = document.createElement("td");
+        nameTd.className = "name-cell";
+        const strong = document.createElement("strong");
+        strong.textContent = feed.name || "未命名 RSS";
+        const small = document.createElement("small");
+        small.textContent = feed.url || "(未填写 URL)";
+        nameTd.append(strong, small);
+
+        const keywordsTd = document.createElement("td");
+        keywordsTd.textContent = feed.keywords.length ? feed.keywords.join(", ") : "全部";
+
+        const intervalTd = document.createElement("td");
+        intervalTd.textContent = feed.check_interval_minutes ? `${feed.check_interval_minutes} 分钟` : "全局";
+
+        const enabledTd = document.createElement("td");
+        enabledTd.appendChild(makePill(feed.enabled ? "已启用" : "未启用", feed.enabled ? "pill-green" : "pill-gray"));
+
+        const actionsTd = document.createElement("td");
+        actionsTd.className = "actions";
+        actionsTd.append(
+          makeActionButton("编辑", () => openFeedDialog(index)),
+          makeActionButton("删除", () => removeFeed(index), "danger")
+        );
+
+        row.append(nameTd, keywordsTd, intervalTd, enabledTd, actionsTd);
+        refs["feeds-body"].appendChild(row);
+      });
+    }
+
+    function renderDashboard() {
+      const enabledTargets = state.targets.filter((item) => item.enabled).length;
+      const enabledFeeds = state.rss_feeds.filter((item) => item.enabled).length;
+      const placeholders = countPlaceholders();
+
+      refs["stat-apprise"].textContent = String(state.global.apprise_urls.length);
+      refs["stat-targets"].textContent = `${enabledTargets} / ${state.targets.length}`;
+      refs["stat-feeds"].textContent = `${enabledFeeds} / ${state.rss_feeds.length}`;
+
+      if (placeholders > 0) {
+        refs["stat-state"].textContent = "待补链接";
+        refs["stat-note"].textContent = `还有 ${placeholders} 条占位记录需要替换成你的真实链接。`;
+        refs["status-bar"].textContent = `还有 ${placeholders} 条占位记录需要替换成你的真实链接，完成后再导出。`;
+      } else if (!state.global.apprise_urls.length) {
+        refs["stat-state"].textContent = "未设通知";
+        refs["stat-note"].textContent = "当前没有通知地址。配置虽然能导出，但运行后不会发提醒。";
+        refs["status-bar"].textContent = "还没有填写通知地址。现在也能导出，但运行后不会发送提醒。";
+      } else {
+        refs["stat-state"].textContent = "可导出";
+        refs["stat-note"].textContent = "当前配置看起来已经可以使用。";
+        refs["status-bar"].textContent = "当前配置看起来已经可以使用。你可以继续检查 YAML 预览，或直接导出。";
+      }
+    }
+
+    function renderPreview() {
+      refs["yaml-preview"].textContent = buildYaml(state);
+    }
+
+    function makePill(text, cls) {
+      const span = document.createElement("span");
+      span.className = `pill ${cls}`;
+      span.textContent = text;
+      return span;
+    }
+
+    function makeActionButton(label, onClick, tone = "normal") {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "icon-btn";
+      if (tone !== "normal") {
+        button.dataset.tone = tone;
+      }
+      button.textContent = label;
+      button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function makeEmptyRow(text, colSpan) {
+      const row = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = colSpan;
+      td.className = "empty-state";
+      td.textContent = text;
+      row.appendChild(td);
+      return row;
+    }
+
+    function countPlaceholders() {
+      return state.targets.filter((item) => String(item.url || "").startsWith("https://example.com/")).length +
+        state.rss_feeds.filter((item) => String(item.url || "").startsWith("https://example.com/")).length;
+    }
+
+    function openTargetDialog(index = null) {
+      editingTargetIndex = index;
+      const isEdit = index !== null;
+      const item = isEdit ? state.targets[index] : {
+        name: "",
+        url: "",
+        detection_mode: "content_hash",
+        css_selector: "",
+        proxy: "",
+        check_interval_minutes: "",
+        enabled: true,
+      };
+      refs["target-dialog-title"].textContent = isEdit ? "编辑页面监控" : "新增页面监控";
+      refs["target-name"].value = item.name || "";
+      refs["target-url"].value = item.url || "";
+      refs["target-mode"].value = item.detection_mode || "content_hash";
+      refs["target-selector"].value = item.css_selector || "";
+      refs["target-proxy"].value = item.proxy || "";
+      refs["target-interval"].value = item.check_interval_minutes ?? "";
+      refs["target-enabled"].checked = item.enabled !== false;
+      refs["target-dialog"].showModal();
+    }
+
+    function openFeedDialog(index = null) {
+      editingFeedIndex = index;
+      const isEdit = index !== null;
+      const item = isEdit ? state.rss_feeds[index] : {
+        name: "",
+        url: "",
+        keywords: [],
+        proxy: "",
+        check_interval_minutes: "",
+        enabled: true,
+      };
+      refs["feed-dialog-title"].textContent = isEdit ? "编辑 RSS 订阅" : "新增 RSS 订阅";
+      refs["feed-name"].value = item.name || "";
+      refs["feed-url"].value = item.url || "";
+      refs["feed-keywords"].value = (item.keywords || []).join(", ");
+      refs["feed-proxy"].value = item.proxy || "";
+      refs["feed-interval"].value = item.check_interval_minutes ?? "";
+      refs["feed-enabled"].checked = item.enabled !== false;
+      refs["feed-dialog"].showModal();
+    }
+
+    function saveTarget(event) {
+      event.preventDefault();
+      const name = refs["target-name"].value.trim();
+      const url = refs["target-url"].value.trim();
+      if (!name || !url) {
+        window.alert("名称和 URL 不能为空。");
+        return;
+      }
+      if (!/^https?:\/\//i.test(url)) {
+        window.alert("URL 必须以 http:// 或 https:// 开头。");
+        return;
+      }
+      const item = normalizeTarget({
+        name,
+        url,
+        detection_mode: refs["target-mode"].value,
+        css_selector: refs["target-selector"].value.trim(),
+        proxy: refs["target-proxy"].value.trim(),
+        check_interval_minutes: refs["target-interval"].value.trim() || null,
+        enabled: refs["target-enabled"].checked,
+      });
+
+      if (editingTargetIndex === null) {
+        state.targets.push(item);
+      } else {
+        state.targets.splice(editingTargetIndex, 1, item);
+      }
+      refs["target-dialog"].close();
+      renderAll();
+    }
+
+    function saveFeed(event) {
+      event.preventDefault();
+      const name = refs["feed-name"].value.trim();
+      const url = refs["feed-url"].value.trim();
+      if (!name || !url) {
+        window.alert("名称和 URL 不能为空。");
+        return;
+      }
+      if (!/^https?:\/\//i.test(url)) {
+        window.alert("URL 必须以 http:// 或 https:// 开头。");
+        return;
+      }
+      const item = normalizeFeed({
+        name,
+        url,
+        keywords: refs["feed-keywords"].value,
+        proxy: refs["feed-proxy"].value.trim(),
+        check_interval_minutes: refs["feed-interval"].value.trim() || null,
+        enabled: refs["feed-enabled"].checked,
+      });
+
+      if (editingFeedIndex === null) {
+        state.rss_feeds.push(item);
+      } else {
+        state.rss_feeds.splice(editingFeedIndex, 1, item);
+      }
+      refs["feed-dialog"].close();
+      renderAll();
+    }
+
+    function removeTarget(index) {
+      if (!window.confirm(`要删除页面监控“${state.targets[index].name || "未命名页面"}”吗？`)) {
+        return;
+      }
+      state.targets.splice(index, 1);
+      renderAll();
+    }
+
+    function removeFeed(index) {
+      if (!window.confirm(`要删除 RSS 订阅“${state.rss_feeds[index].name || "未命名 RSS"}”吗？`)) {
+        return;
+      }
+      state.rss_feeds.splice(index, 1);
+      renderAll();
+    }
+
+    function nextPlaceholderIndex(items, prefix) {
+      let highest = 0;
+      const re = new RegExp(`^${escapeRegExp(prefix)}\\s+(\\d+)$`);
+      items.forEach((item) => {
+        const match = re.exec(String(item.name || "").trim());
+        if (match) {
+          highest = Math.max(highest, Number.parseInt(match[1], 10));
+        }
+      });
+      return highest + 1;
+    }
+
+    function escapeRegExp(value) {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function appendUnique(list, items) {
+      const existing = new Set(list.map((item) => `${item.name}|||${item.url}`));
+      let added = 0;
+      items.forEach((item) => {
+        const key = `${item.name}|||${item.url}`;
+        if (existing.has(key)) {
+          return;
+        }
+        list.push(deepClone(item));
+        existing.add(key);
+        added += 1;
+      });
+      return added;
+    }
+
+    function loadTemplate() {
+      if ((state.targets.length || state.rss_feeds.length) &&
+          !window.confirm("这会用“4 个精准目标 + 1 个 VPS 占位 + 4 个大学 RSS + 1 个 RSS 占位 + 5 个 Twitch 页面”的初始模板替换当前的页面和订阅列表。\n\n继续吗？")) {
+        return;
+      }
+      const currentUrls = [...state.global.apprise_urls];
+      state = defaultState();
+      state.global.apprise_urls = currentUrls;
+      state.targets = deepClone(PRESET_PRECISE_TARGETS)
+        .concat(makeVpsPlaceholders(1, 1))
+        .concat(deepClone(TWITCH_OFFICIAL_TARGETS));
+      state.rss_feeds = deepClone(PRESET_UNIVERSITY_FEEDS)
+        .concat(makeRssPlaceholders(1, 1));
+      syncGlobalsFromState();
+      refs["status-bar"].textContent = "模板已载入。前 4 个页面和前 4 个 RSS 是按你需求预填的，另外保留了 1 个 VPS 占位和 1 个 RSS 占位；Twitch / 游戏页面也已经预填好了。";
+      renderAll();
+    }
+
+    function addTwitchBundle() {
+      const added = appendUnique(state.targets, TWITCH_OFFICIAL_TARGETS);
+      refs["status-bar"].textContent = `已新增 ${added} 个 Twitch / 游戏官方页面。`;
+      renderAll();
+    }
+
+    function addVpsSlots() {
+      const start = nextPlaceholderIndex(state.targets, "VPS 页面");
+      const added = appendUnique(state.targets, makeVpsPlaceholders(5, start));
+      refs["status-bar"].textContent = `已新增 ${added} 个 VPS 占位页面。导出前请把 example.com 链接改成你的真实链接。`;
+      renderAll();
+    }
+
+    function addRssSlots() {
+      const start = nextPlaceholderIndex(state.rss_feeds, "RSS 订阅");
+      const added = appendUnique(state.rss_feeds, makeRssPlaceholders(5, start));
+      refs["status-bar"].textContent = `已新增 ${added} 个 RSS 占位订阅。导出前请把 example.com 链接改成你的真实链接。`;
+      renderAll();
+    }
+
+    function clearTargetsAndFeeds() {
+      if (!state.targets.length && !state.rss_feeds.length) {
+        refs["status-bar"].textContent = "当前没有可清空的页面或订阅。";
+        return;
+      }
+      if (!window.confirm("要清空全部页面和 RSS 订阅吗？通知地址和全局设置会保留。")) {
+        return;
+      }
+      state.targets = [];
+      state.rss_feeds = [];
+      refs["status-bar"].textContent = "页面和 RSS 订阅已清空。";
+      renderAll();
+    }
+
+    async function saveYamlText(text, filename = "config.yaml") {
+      if (typeof window.showSaveFilePicker === "function") {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: "YAML 配置文件",
+              accept: {
+                "text/yaml": [".yaml", ".yml"],
+                "application/x-yaml": [".yaml", ".yml"],
+                "text/plain": [".yaml"],
+              },
+            }],
+          });
+          const writable = await handle.createWritable();
+          await writable.write(text);
+          await writable.close();
+          return { method: "picker", fileName: handle.name || filename };
+        } catch (error) {
+          if (error && error.name === "AbortError") {
+            return { aborted: true };
+          }
+          console.warn("showSaveFilePicker failed, fallback to download", error);
+        }
+      }
+
+      const blob = new Blob([text], { type: "text/yaml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      return { method: "download", fileName: filename };
+    }
+
+    async function exportConfig() {
+      syncStateFromGlobals();
+      const placeholders = countPlaceholders();
+      if (!state.global.apprise_urls.length &&
+          !window.confirm("你还没有设置通知地址。程序虽然会抓取，但不会发提醒。\n\n仍然继续导出吗？")) {
+        return;
+      }
+      if (placeholders > 0 &&
+          !window.confirm(`当前还有 ${placeholders} 条占位记录没替换成真实链接。\n\n仍然继续导出吗？`)) {
+        return;
+      }
+      const result = await saveYamlText(buildYaml(state), "config.yaml");
+      if (result && result.aborted) {
+        refs["status-bar"].textContent = "已取消导出。";
+        return;
+      }
+      if (result && result.method === "picker") {
+        refs["status-bar"].textContent = `已保存 ${result.fileName}。把它上传到 VPS，并放到和 worker.py 相同的目录即可。`;
+        return;
+      }
+      refs["status-bar"].textContent = "当前环境不支持直接选择保存位置，已回退为浏览器下载 config.yaml。把它上传到 VPS，并放到和 worker.py 相同的目录即可。";
+    }
+
+    async function importConfig(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) {
+        return;
+      }
+      try {
+        const text = await file.text();
+        state = normalizeState(parseLimitedYaml(text));
+        syncGlobalsFromState();
+        renderAll();
+        refs["status-bar"].textContent = `已加载 ${state.targets.length} 个页面目标和 ${state.rss_feeds.length} 个 RSS 订阅。`;
+      } catch (error) {
+        window.alert(`加载失败：${error.message}`);
+      } finally {
+        event.target.value = "";
+      }
+    }
+
+    function yamlString(value) {
+      const safe = String(value ?? "")
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, "\\n")
+        .replace(/\r/g, "\\r")
+        .replace(/\t/g, "\\t");
+      return `"${safe}"`;
+    }
+
+    function buildYaml(data) {
+      const lines = ["# Monitoring System Config"];
+      lines.push(`# Generated: ${formatDate(new Date())}`);
+      lines.push("");
+      lines.push("global:");
+      lines.push(`  check_interval_minutes: ${Number(data.global.check_interval_minutes)}`);
+      lines.push(`  heartbeat_interval_hours: ${Number(data.global.heartbeat_interval_hours)}`);
+      lines.push(`  request_timeout: ${Number(data.global.request_timeout)}`);
+      lines.push(`  randomize_delay_min: ${Number(data.global.randomize_delay_min)}`);
+      lines.push(`  randomize_delay_max: ${Number(data.global.randomize_delay_max)}`);
+      if (data.global.apprise_urls.length) {
+        lines.push("  apprise_urls:");
+        data.global.apprise_urls.forEach((url) => lines.push(`    - ${yamlString(url)}`));
+      } else {
+        lines.push("  apprise_urls: []");
+      }
+      lines.push("");
+      lines.push("targets:");
+      if (!data.targets.length) {
+        lines.push("  []");
+      }
+      data.targets.forEach((item) => {
+        lines.push(`  - name: ${yamlString(item.name)}`);
+        lines.push(`    url: ${yamlString(item.url)}`);
+        lines.push(`    detection_mode: ${yamlString(item.detection_mode || "content_hash")}`);
+        if (item.css_selector) lines.push(`    css_selector: ${yamlString(item.css_selector)}`);
+        if (item.proxy) lines.push(`    proxy: ${yamlString(item.proxy)}`);
+        if (item.check_interval_minutes != null && item.check_interval_minutes !== "") {
+          lines.push(`    check_interval_minutes: ${Number(item.check_interval_minutes)}`);
+        }
+        lines.push(`    enabled: ${item.enabled ? "true" : "false"}`);
+      });
+      lines.push("");
+      lines.push("rss_feeds:");
+      if (!data.rss_feeds.length) {
+        lines.push("  []");
+      }
+      data.rss_feeds.forEach((item) => {
+        lines.push(`  - name: ${yamlString(item.name)}`);
+        lines.push(`    url: ${yamlString(item.url)}`);
+        if (item.keywords.length) {
+          lines.push("    keywords:");
+          item.keywords.forEach((kw) => lines.push(`      - ${yamlString(kw)}`));
+        } else {
+          lines.push("    keywords: []");
+        }
+        if (item.proxy) lines.push(`    proxy: ${yamlString(item.proxy)}`);
+        if (item.check_interval_minutes != null && item.check_interval_minutes !== "") {
+          lines.push(`    check_interval_minutes: ${Number(item.check_interval_minutes)}`);
+        }
+        lines.push(`    enabled: ${item.enabled ? "true" : "false"}`);
+      });
+      return `${lines.join("\n")}\n`;
+    }
+
+    function formatDate(date) {
+      const pad = (value) => String(value).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    function stripComment(line) {
+      let output = "";
+      let inQuote = false;
+      let escaping = false;
+      for (const ch of line) {
+        if (escaping) {
+          output += ch;
+          escaping = false;
+          continue;
+        }
+        if (ch === "\\") {
+          output += ch;
+          escaping = true;
+          continue;
+        }
+        if (ch === "\"") {
+          output += ch;
+          inQuote = !inQuote;
+          continue;
+        }
+        if (ch === "#" && !inQuote) break;
+        output += ch;
+      }
+      return output.replace(/\s+$/, "");
+    }
+
+    function parseScalar(rawValue) {
+      const value = rawValue.trim();
+      if (value === "") return "";
+      if (value === "[]") return [];
+      if (value === "true") return true;
+      if (value === "false") return false;
+      if (/^".*"$/.test(value)) {
+        return value.slice(1, -1)
+          .replace(/\\n/g, "\n")
+          .replace(/\\r/g, "\r")
+          .replace(/\\t/g, "\t")
+          .replace(/\\"/g, "\"")
+          .replace(/\\\\/g, "\\");
+      }
+      if (/^-?\d+$/.test(value)) return Number.parseInt(value, 10);
+      if (/^-?(?:\d+\.\d+|\d+\.|\.\d+)$/.test(value)) return Number.parseFloat(value);
+      return value;
+    }
+
+    function splitKeyValue(line, errorPrefix) {
+      const idx = line.indexOf(":");
+      if (idx === -1) throw new Error(`${errorPrefix}：${line}`);
+      return [line.slice(0, idx).trim(), line.slice(idx + 1).trim()];
+    }
+
+    function parseLimitedYaml(text) {
+      const root = { global: {}, targets: [], rss_feeds: [] };
+      let section = null;
+      let currentItem = null;
+      let currentListKey = null;
+      for (const rawLine of text.split(/\r?\n/)) {
+        const line = stripComment(rawLine);
+        if (!line.trim()) continue;
+        const indent = line.length - line.trimStart().length;
+        const stripped = line.trim();
+        if (indent === 0 && stripped.endsWith(":")) {
+          const key = stripped.slice(0, -1);
+          if (!(key in root)) throw new Error(`不支持的顶层键：${key}`);
+          section = key;
+          currentItem = null;
+          currentListKey = null;
+          continue;
+        }
+        if (!section) continue;
+        if (section === "global") {
+          if (indent === 4 && stripped.startsWith("- ")) {
+            if (!currentListKey) throw new Error(`global 段中出现了意外的列表项：${rawLine}`);
+            root.global[currentListKey].push(parseScalar(stripped.slice(2).trim()));
+            continue;
+          }
+          if (indent !== 2) throw new Error(`global 段缩进不正确：${rawLine}`);
+          const [key, value] = splitKeyValue(stripped, "global 段格式无效");
+          if (value === "") {
+            root.global[key] = [];
+            currentListKey = key;
+          } else {
+            root.global[key] = parseScalar(value);
+            currentListKey = null;
+          }
+          continue;
+        }
+        if (section === "targets" || section === "rss_feeds") {
+          if (indent === 2 && stripped === "[]") {
+            currentItem = null;
+            currentListKey = null;
+            continue;
+          }
+          if (indent === 2 && stripped.startsWith("- ")) {
+            currentItem = {};
+            root[section].push(currentItem);
+            currentListKey = null;
+            const remainder = stripped.slice(2).trim();
+            if (remainder) {
+              const [key, value] = splitKeyValue(remainder, "列表项格式无效");
+              currentItem[key] = parseScalar(value);
+            }
+            continue;
+          }
+          if (!currentItem) throw new Error(`${section} 段中存在未归属到列表项的属性：${rawLine}`);
+          if (indent === 4) {
+            const [key, value] = splitKeyValue(stripped, "映射行格式无效");
+            if (value === "") {
+              currentItem[key] = [];
+              currentListKey = key;
+            } else {
+              currentItem[key] = parseScalar(value);
+              currentListKey = null;
+            }
+            continue;
+          }
+          if (indent === 6 && stripped.startsWith("- ")) {
+            if (!currentListKey) throw new Error(`出现了意外的嵌套列表项：${rawLine}`);
+            currentItem[currentListKey].push(parseScalar(stripped.slice(2).trim()));
+            continue;
+          }
+          throw new Error(`不支持的 YAML 结构：${rawLine}`);
+        }
+      }
+      return root;
+    }
+
+    function maybeRunSelfTest() {
+      const params = new URLSearchParams(window.location.search);
+      if (!params.has("selftest")) return;
+      loadTemplate();
+      state.global.apprise_urls = ["tgram://TOKEN/CHATID"];
+      syncGlobalsFromState();
+      renderAll();
+      const yamlText = buildYaml(state);
+      const parsed = parseLimitedYaml(yamlText);
+      refs["selftest-output"].textContent = JSON.stringify({
+        title: document.title,
+        targets: state.targets.length,
+        feeds: state.rss_feeds.length,
+        firstTarget: parsed.targets[0].name,
+        firstTwitch: parsed.targets[5].name,
+        firstFeed: parsed.rss_feeds[0].name,
+        yamlHasTargets: yamlText.includes("targets:"),
+        yamlHasFeeds: yamlText.includes("rss_feeds:")
+      });
+    }
+  </script>
+</body>
+</html>
